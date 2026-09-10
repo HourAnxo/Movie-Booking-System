@@ -2,6 +2,7 @@ package com.example.seatservice.dto;
 
 import com.example.seatservice.entity.SeatStatus;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 public record SeatResponseDTO(
@@ -15,6 +16,8 @@ public record SeatResponseDTO(
         String seatType,
 
         SeatStatus status,
+
+        BigDecimal price,
 
         LocalDateTime createdAt
 

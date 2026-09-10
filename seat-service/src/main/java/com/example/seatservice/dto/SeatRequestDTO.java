@@ -1,10 +1,9 @@
 package com.example.seatservice.dto;
 
 import com.example.seatservice.entity.SeatStatus;
-import jakarta.validation.constraints.NotBlank;
-import jakarta.validation.constraints.NotNull;
-import jakarta.validation.constraints.Positive;
-import jakarta.validation.constraints.Size;
+import jakarta.validation.constraints.*;
+
+import java.math.BigDecimal;
 
 /**
  * status stays optional: SeatServiceImpl reads null as "AVAILABLE" on
@@ -26,6 +25,9 @@ public record SeatRequestDTO(
         @Size(max = 20, message = "must be at most 20 characters")
         String seatType,
 
-        SeatStatus status
+        SeatStatus status,
+
+        @DecimalMin(value="0.0",message = "price mush be non-negative")
+        BigDecimal price
 ) {
 }

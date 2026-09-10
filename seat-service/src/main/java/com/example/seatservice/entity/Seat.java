@@ -3,6 +3,7 @@ package com.example.seatservice.entity;
 import jakarta.persistence.*;
 import lombok.*;
 
+import java.math.BigDecimal;
 import java.time.LocalDateTime;
 
 @Entity
@@ -37,6 +38,10 @@ public class Seat {
     @Enumerated(EnumType.STRING)
     @Column(nullable = false)
     private SeatStatus status;
+
+    @Column(name="price", nullable = false, precision = 10,scale=2)
+    @Builder.Default
+    private BigDecimal price= new BigDecimal("5.00");
 
     @Column(name = "created_at")
     private LocalDateTime createdAt;
