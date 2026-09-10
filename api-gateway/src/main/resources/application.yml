@@ -1,0 +1,92 @@
+spring:
+  application:
+    name: api-gateway
+  cloud:
+    gateway:
+      server:
+        webmvc:
+          routes:
+            - id: auth-service
+              uri: lb://auth-service
+              predicates:
+                - Path=/api/auth/**
+
+            - id: user-service
+              uri: lb://user-service
+              predicates:
+                - Path=/api/users/**
+
+            - id: movie-service
+              uri: lb://movie-service
+              predicates:
+                - Path=/api/movies/**
+
+            - id: theater-service
+              uri: lb://theater-service
+              predicates:
+                - Path=/api/theaters/**
+
+            - id: screen-service
+              uri: lb://screen-service
+              predicates:
+                - Path=/api/screens/**
+
+            - id: showtime-service
+              uri: lb://showtime-service
+              predicates:
+                - Path=/api/showtimes/**
+
+            - id: seat-service
+              uri: lb://seat-service
+              predicates:
+                - Path=/api/seats/**
+
+            - id: booking-service
+              uri: lb://booking-service
+              predicates:
+                - Path=/api/bookings/**
+
+            - id: payment-service
+              uri: lb://payment-service
+              predicates:
+                - Path=/api/payments/**
+
+            - id: admin-service
+              uri: lb://admin-service
+              predicates:
+                - Path=/api/admin/**
+
+server:
+  port: 8083
+
+eureka:
+  client:
+    # Report real health to the registry rather than "the process is
+    # running", so a gateway with a broken dependency is marked DOWN.
+    healthcheck:
+      enabled: true
+    service-url:
+      defaultZone: http://localhost:8761/eureka/
+# Must match auth-service's jwt.secret — the gateway verifies the same
+# HS256 signature that auth-service issues. Override both with the
+# JWT_SECRET environment variable outside local development.
+jwt:
+  secret: ${JWT_SECRET:my-super-secret-key-for-movie-theater-project-2026-minimum-32-characters}
+
+# /actuator/** is public at the gateway, but the gateway only routes /api/**,
+# so this exposes the GATEWAY's own health and never a downstream service's.
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: always
+
+# Browser origins allowed to call the API. Comma-separated; override with
+# the CORS_ALLOWED_ORIGINS environment variable for a deployed frontend.
+cors:
+  allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173,http://localhost:3000}

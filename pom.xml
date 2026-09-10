@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.example</groupId>
+    <artifactId>movie-booking-system</artifactId>
+    <version>1.0.0</version>
+    <packaging>pom</packaging>
+    <name>Movie Booking System</name>
+
+    <modules>
+        <module>discovery-server</module>
+        <module>api-gateway</module>
+        <module>auth-service</module>
+        <module>user-service</module>
+        <module>movie-service</module>
+        <module>theater-service</module>
+        <module>screen-service</module>
+        <module>showtime-service</module>
+        <module>seat-service</module>
+        <module>booking-service</module>
+        <module>payment-service</module>
+        <module>admin-service</module>
+    </modules>
+</project>

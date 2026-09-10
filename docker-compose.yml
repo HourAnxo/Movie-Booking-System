@@ -1,0 +1,199 @@
+name: movie-booking-system
+
+# ---------------------------------------------------------------------------
+# Startup order is the whole point of this file. The system has a hard
+# dependency chain — MySQL, then Eureka, then everything else — and getting
+# it wrong produces failures that look like bugs: a service whose Flyway
+# migration cannot reach the database, or a caller that resolves
+# http://SEAT-SERVICE to nothing because the registry was not up yet.
+#
+# Only the gateway, Eureka and MySQL are published to the host. The business
+# services are reachable only on the internal network, which is what the
+# architecture actually assumes: they run permitAll() filter chains and trust
+# the gateway to have authenticated the caller. Publishing one of them would
+# hand anyone on the host an unauthenticated way in. Add a `ports:` entry
+# deliberately if you need to probe one directly.
+# ---------------------------------------------------------------------------
+
+x-infra-ready: &infra-ready
+  mysql:
+    condition: service_healthy
+  discovery-server:
+    condition: service_healthy
+
+x-eureka-ready: &eureka-ready
+  discovery-server:
+    condition: service_healthy
+
+x-common-env: &common-env
+  EUREKA_CLIENT_SERVICEURL_DEFAULTZONE: http://discovery-server:8761/eureka/
+  # Register by container IP. The default is the container's hostname, which
+  # changes on every recreate and is a poor thing to build a registry on.
+  EUREKA_INSTANCE_PREFER_IP_ADDRESS: "true"
+  JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
+
+x-db-env: &db-env
+  SPRING_DATASOURCE_USERNAME: root
+  SPRING_DATASOURCE_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+
+x-service: &service
+  restart: unless-stopped
+  networks: [movie-net]
+
+
+services:
+
+  # ---------------------------------------------------------------- infra --
+
+  mysql:
+    image: mysql:8.4
+    container_name: mbs-mysql
+    restart: unless-stopped
+    networks: [movie-net]
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-root}
+    ports:
+      # 3307 on the host: port 3306 is almost always already taken by the
+      # local MySQL this project was developed against.
+      - "3307:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./docker/mysql/init.sql:/docker-entrypoint-initdb.d/01-init.sql:ro
+    healthcheck:
+      # Every service below waits on this. "container started" is not the
+      # same as "MySQL accepts connections" — it is roughly 20 seconds short.
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-p${MYSQL_ROOT_PASSWORD:-root}"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+      start_period: 30s
+
+  discovery-server:
+    <<: *service
+    build: ./discovery-server
+    container_name: mbs-discovery-server
+    ports:
+      - "8761:8761"
+    environment:
+      JAVA_TOOL_OPTIONS: "-XX:MaxRAMPercentage=75.0"
+    # healthcheck comes from the image now: /actuator/health, which only
+    # reports UP once Eureka is actually serving the registry.
+
+  api-gateway:
+    <<: *service
+    build: ./api-gateway
+    container_name: mbs-api-gateway
+    depends_on: *eureka-ready
+    ports:
+      # The single entry point, and the only place authentication is enforced.
+      - "8083:8083"
+    environment:
+      <<: *common-env
+      JWT_SECRET: ${JWT_SECRET:-my-super-secret-key-for-movie-theater-project-2026-minimum-32-characters}
+
+  # ------------------------------------------------------------ business --
+
+  auth-service:
+    <<: *service
+    build: ./auth-service
+    container_name: mbs-auth-service
+    depends_on: *infra-ready
+    environment:
+      <<: [*common-env, *db-env]
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/auth_db?allowPublicKeyRetrieval=true&useSSL=false"
+      # Must be byte-identical to the gateway's: one signs the tokens, the
+      # other verifies them.
+      JWT_SECRET: ${JWT_SECRET:-my-super-secret-key-for-movie-theater-project-2026-minimum-32-characters}
+
+  user-service:
+    <<: *service
+    build: ./user-service
+    container_name: mbs-user-service
+    depends_on: *infra-ready
+    environment:
+      <<: [*common-env, *db-env]
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/user_db?allowPublicKeyRetrieval=true&useSSL=false"
+
+  movie-service:
+    <<: *service
+    build: ./movie-service
+    container_name: mbs-movie-service
+    depends_on: *infra-ready
+    environment:
+      <<: [*common-env, *db-env]
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/movie_db?allowPublicKeyRetrieval=true&useSSL=false"
+
+  theater-service:
+    <<: *service
+    build: ./theater-service
+    container_name: mbs-theater-service
+    depends_on: *infra-ready
+    environment:
+      <<: [*common-env, *db-env]
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/theater_db?allowPublicKeyRetrieval=true&useSSL=false"
+
+  screen-service:
+    <<: *service
+    build: ./screen-service
+    container_name: mbs-screen-service
+    depends_on: *infra-ready
+    environment:
+      <<: [*common-env, *db-env]
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/screen_db?allowPublicKeyRetrieval=true&useSSL=false"
+
+  showtime-service:
+    <<: *service
+    build: ./showtime-service
+    container_name: mbs-showtime-service
+    depends_on: *infra-ready
+    environment:
+      <<: [*common-env, *db-env]
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/showtime_db?allowPublicKeyRetrieval=true&useSSL=false"
+
+  seat-service:
+    <<: *service
+    build: ./seat-service
+    container_name: mbs-seat-service
+    depends_on: *infra-ready
+    environment:
+      <<: [*common-env, *db-env]
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/seat_db?allowPublicKeyRetrieval=true&useSSL=false"
+
+  booking-service:
+    <<: *service
+    build: ./booking-service
+    container_name: mbs-booking-service
+    # Only Eureka is a startup dependency. seat-service and user-service are
+    # runtime dependencies resolved through the registry — naming them here
+    # would not make the calls any safer, and the saga already handles them
+    # being unreachable.
+    depends_on: *infra-ready
+    environment:
+      <<: [*common-env, *db-env]
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/booking_db?allowPublicKeyRetrieval=true&useSSL=false"
+
+  payment-service:
+    <<: *service
+    build: ./payment-service
+    container_name: mbs-payment-service
+    depends_on: *infra-ready
+    environment:
+      <<: [*common-env, *db-env]
+      SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/payment_db?allowPublicKeyRetrieval=true&useSSL=false"
+
+  admin-service:
+    <<: *service
+    build: ./admin-service
+    container_name: mbs-admin-service
+    # No datasource of its own — it reads everything through user-service.
+    depends_on: *eureka-ready
+    environment:
+      <<: *common-env
+
+
+networks:
+  movie-net:
+    driver: bridge
+
+volumes:
+  mysql-data:
