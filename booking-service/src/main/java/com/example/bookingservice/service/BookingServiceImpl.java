@@ -4,6 +4,7 @@ import com.example.bookingservice.client.SeatServiceClient;
 import com.example.bookingservice.client.UserServiceClient;
 import com.example.bookingservice.dto.BookingRequestDTO;
 import com.example.bookingservice.dto.BookingResponseDTO;
+import com.example.bookingservice.dto.ReservedSeatDTO;
 import com.example.bookingservice.entity.Booking;
 import com.example.bookingservice.entity.BookingStatus;
 import com.example.bookingservice.exception.ResourceNotFoundException;
@@ -59,16 +60,28 @@ public class BookingServiceImpl implements BookingService {
 
         userServiceClient.requireUserExists(request.userId());
 
-        seatServiceClient.reserveSeat(request.seatId());
+        ReservedSeatDTO seat =
+                seatServiceClient.reserveSeat(request.seatId());
 
         try {
+
+            // The price is the seat's, never the client's. payment-service
+            // builds a real Bakong QR for exactly this amount, so a total
+            // taken from the request body would let a caller name their
+            // own price.
+            if (seat == null || seat.price() == null) {
+                throw new IllegalStateException(
+                        "seat-service returned no price for seat "
+                                + request.seatId()
+                );
+            }
 
             Booking booking = Booking.builder()
                     .userId(request.userId())
                     .showtimeId(request.showtimeId())
                     .seatId(request.seatId())
                     .bookingStatus(BookingStatus.PENDING)
-                    .totalAmount(request.totalAmount())
+                    .totalAmount(seat.price())
                     .createdAt(LocalDateTime.now())
                     .build();
 
@@ -147,8 +160,10 @@ public class BookingServiceImpl implements BookingService {
 
         booking.setUserId(request.userId());
         booking.setShowtimeId(request.showtimeId());
-        booking.setTotalAmount(request.totalAmount());
 
+        // totalAmount is not updatable either: it is the reserved seat's
+        // price, and payment-service charges exactly that.
+        //
         // seatId is intentionally not updatable here — moving a booking to
         // a different seat means releasing one seat and reserving another,
         // which is a cancel + re-book, not a field edit.

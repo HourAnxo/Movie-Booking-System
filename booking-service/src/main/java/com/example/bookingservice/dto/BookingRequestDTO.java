@@ -14,7 +14,9 @@ import java.math.BigDecimal;
  * insert failed, and the seat would then need releasing. Rejecting it at
  * the edge means the saga never starts.
  *
- * @Digits mirrors DECIMAL(10,2) — 8 digits before the point, 2 after.
+ * totalAmount is optional and IGNORED: the booking is priced from the
+ * reserved seat. It stays in the record so existing clients that still
+ * send it are not rejected, and a malformed value is still a 400.
  */
 public record BookingRequestDTO(
 
@@ -30,7 +32,6 @@ public record BookingRequestDTO(
         @Positive(message = "must be a positive id")
         Integer seatId,
 
-        @NotNull(message = "is required")
         @DecimalMin(value = "0.00", message = "must not be negative")
         @Digits(integer = 8, fraction = 2,
                 message = "must have at most 8 digits and 2 decimal places")

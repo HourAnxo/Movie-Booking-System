@@ -1,5 +1,6 @@
 package com.example.bookingservice.client;
 
+import com.example.bookingservice.dto.ReservedSeatDTO;
 import com.example.bookingservice.exception.SeatUnavailableException;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreaker;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreakerFactory;
@@ -40,28 +41,27 @@ public class SeatServiceClient {
      * Marks the seat BOOKED. seat-service answers 409 when the seat is
      * already taken; that is translated here so the caller sees a domain
      * exception rather than an HTTP one.
+     *
+     * Returns the reserved seat so the booking can be priced from it.
      */
-    public void reserveSeat(Integer seatId) {
+    public ReservedSeatDTO reserveSeat(Integer seatId) {
 
-        circuitBreaker.run(
-                () -> {
-                    doReserveSeat(seatId);
-                    return null;
-                },
+        return circuitBreaker.run(
+                () -> doReserveSeat(seatId),
                 throwable -> {
                     throw asRuntimeException(throwable);
                 }
         );
     }
 
-    private void doReserveSeat(Integer seatId) {
+    private ReservedSeatDTO doReserveSeat(Integer seatId) {
 
         try {
 
-            restClient.put()
+            return restClient.put()
                     .uri("/api/seats/{id}/reserve", seatId)
                     .retrieve()
-                    .toBodilessEntity();
+                    .body(ReservedSeatDTO.class);
 
         } catch (RestClientResponseException ex) {
 
