@@ -44,10 +44,11 @@ export const bookings = {
 }
 
 export const payments = {
-    create: (body) => post('/api/payments', body),
-    pay: (id, transactionId) =>
-        put(`/api/payments/${id}/paid?transactionId=${encodeURIComponent(transactionId)}`),
-    fail: (id) => put(`/api/payments/${id}/failed`),
+    // Issues a real KHQR. The amount is the booking's own; it is not sent.
+    createBakong: (bookingId) => post('/api/payments/bakong', { bookingId }),
+    // Asks payment-service to check with Bakong; poll until status is final.
+    checkBakong: (id) => get(`/api/payments/${id}/bakong/check`),
+    cancel: (id) => put(`/api/payments/${id}/cancel`),
 }
 
 export const admin = {
