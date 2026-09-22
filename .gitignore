@@ -1,0 +1,2 @@
+# Real secrets (JWT_SECRET, BAKONG_API_TOKEN). .env.example is the template.
+.env
