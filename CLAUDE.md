@@ -29,14 +29,14 @@ cd auth-service
 .\mvnw.cmd test -Dtest=AuthServiceApplicationTests#contextLoads  # one method
 ```
 
-`auth-service`, `movie-service` and `seat-service` carry the `flyway-maven-plugin`, so migration state can be inspected and repaired without booting the app. Credentials default to `root`/`root` via the `db.user` / `db.password` properties:
+`auth-service`, `movie-service`, `seat-service` and `payment-service` carry the `flyway-maven-plugin`, so migration state can be inspected and repaired without booting the app. Credentials default to `root`/`root` via the `db.user` / `db.password` properties:
 
 ```powershell
 mvn flyway:info      # what has been applied
 mvn flyway:repair    # realign checksums after editing an applied migration
 ```
 
-**payment-service is not one of them**, and it is now the service most likely to need them: `V2__add_bakong_fields.sql` adds two UNIQUE constraints, and without the plugin its migration state can only be inspected by booting the app. Add the plugin there before editing a payment migration.
+The other data services do not carry it. Adding it is the plugin block copied from any of the four with the database name changed, plus `db.user` / `db.password` in `<properties>` — worth doing before editing a migration that has already been applied.
 
 No linter or formatter is configured for the twelve Java modules. The frontend has one: **`oxlint`**, via `npm run lint` in `movie-frontend/`. There is no ESLint config despite the Vite React scaffold normally shipping one — do not add ESLint alongside it.
 
