@@ -41,4 +41,28 @@ public class Payment {
 
     @Column(name = "updated_at")
     private LocalDateTime updatedAt;
+
+    // ================= BAKONG (V2) =================
+    // All null for a payment that was not taken through Bakong.
+
+    @Column(length = 3)
+    private String currency;
+
+    @Column(name = "qr_string", columnDefinition = "TEXT")
+    private String qrString;
+
+    @Column(columnDefinition = "CHAR(32)", unique = true)
+    private String md5;
+
+    @Column(name = "expires_at")
+    private LocalDateTime expiresAt;
+
+    @Column(name = "paid_at")
+    private LocalDateTime paidAt;
+
+    @Column(name = "bakong_hash", length = 64, unique = true)
+    private String bakongHash;
+
+    @Column(name = "booking_confirmed_at")
+    private LocalDateTime bookingConfirmedAt;
 }

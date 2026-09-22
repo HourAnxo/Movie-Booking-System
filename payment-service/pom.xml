@@ -111,6 +111,16 @@
             <artifactId>spring-boot-http-client</artifactId>
         </dependency>
 
+        <!-- National Bank of Cambodia's official KHQR SDK. Builds the EMVCo
+             QR string (account, amount, currency, expiry, CRC) and its MD5,
+             which is the key the Bakong Open API looks the payment up by.
+             Not managed by any BOM, so the version is pinned here. -->
+        <dependency>
+            <groupId>kh.gov.nbc.bakong_khqr</groupId>
+            <artifactId>sdk-java</artifactId>
+            <version>1.0.0.17</version>
+        </dependency>
+
         <!-- Spring Security -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

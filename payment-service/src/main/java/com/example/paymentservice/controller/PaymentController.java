@@ -1,5 +1,7 @@
 package com.example.paymentservice.controller;
 
+import com.example.paymentservice.dto.BakongPaymentRequestDTO;
+import com.example.paymentservice.dto.BakongPaymentResponseDTO;
 import com.example.paymentservice.dto.PaymentRequestDTO;
 import com.example.paymentservice.dto.PaymentResponseDTO;
 import com.example.paymentservice.entity.PaymentStatus;
@@ -37,6 +39,49 @@ public class PaymentController {
                 .body(
                         paymentService.createPayment(request)
                 );
+    }
+
+
+    // =========================
+    // PAY WITH BAKONG — issue a real KHQR
+    // =========================
+    /**
+     * The caller's identity comes from the gateway's X-Auth-* headers,
+     * which it derives from the signed token and strips from inbound
+     * requests — never from the body.
+     */
+    @PostMapping("/bakong")
+    public ResponseEntity<BakongPaymentResponseDTO> createBakongPayment(
+            @Valid @RequestBody BakongPaymentRequestDTO request,
+            @RequestHeader(value = "X-Auth-UserId", required = false)
+            Integer callerUserId,
+            @RequestHeader(value = "X-Auth-Role", required = false)
+            String callerRole
+    ) {
+
+        return ResponseEntity
+                .status(HttpStatus.CREATED)
+                .body(
+                        paymentService.createBakongPayment(
+                                request.bookingId(),
+                                callerUserId,
+                                "ADMIN".equals(callerRole)
+                        )
+                );
+    }
+
+
+    // =========================
+    // CHECK BAKONG PAYMENT — polled by the checkout screen
+    // =========================
+    @GetMapping("/{id}/bakong/check")
+    public ResponseEntity<BakongPaymentResponseDTO> checkBakongPayment(
+            @PathVariable Integer id
+    ) {
+
+        return ResponseEntity.ok(
+                paymentService.checkBakongPayment(id)
+        );
     }
 
 

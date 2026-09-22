@@ -1,5 +1,8 @@
 package com.example.paymentservice.client;
 
+import com.example.paymentservice.dto.BookingDTO;
+import com.example.paymentservice.exception.ResourceNotFoundException;
+import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreaker;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreakerFactory;
 import org.springframework.cloud.client.loadbalancer.LoadBalanced;
@@ -33,6 +36,29 @@ public class BookingServiceClient {
                 .build();
 
         this.circuitBreaker = circuitBreakerFactory.create("booking-service");
+    }
+
+    /**
+     * The booking a payment is for — its owner, its status and its price.
+     * A 404 from booking-service surfaces as ResourceNotFoundException.
+     */
+    public BookingDTO getBooking(Integer bookingId) {
+
+        return circuitBreaker.run(
+                () -> {
+                    try {
+                        return restClient.get()
+                                .uri("/api/bookings/{id}", bookingId)
+                                .retrieve()
+                                .body(BookingDTO.class);
+                    } catch (HttpClientErrorException.NotFound ex) {
+                        throw new ResourceNotFoundException("Booking", bookingId);
+                    }
+                },
+                throwable -> {
+                    throw asRuntimeException(throwable);
+                }
+        );
     }
 
     public void confirmBooking(Integer bookingId) {
