@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 A Spring Boot 4 / Spring Cloud microservice system for movie theater booking. Twelve independent Maven projects sit side by side under `D:\Movie-Booking-System`. The root `pom.xml` is a **packaging-`pom` aggregator only** — the child modules declare `spring-boot-starter-parent` as their parent, not this aggregator, so they inherit nothing from it. Each service owns its own dependency versions, its own MySQL schema, and its own Maven wrapper.
 
-Not a git repository. Each module has a `.gitignore`, but nothing is initialized or tracked.
+One git repository at the root (default branch `master`); each module also carries its own `.gitignore`. Longer-form explanations live in `docs/` — `project-overview.md` (the whole system, end to end) and `service-communication.md` (RestClient, Eureka, timeouts, breakers). Keep them in step with this file when the behaviour they describe changes.
 
 ## Commands
 
@@ -35,6 +35,8 @@ cd auth-service
 mvn flyway:info      # what has been applied
 mvn flyway:repair    # realign checksums after editing an applied migration
 ```
+
+**payment-service is not one of them**, and it is now the service most likely to need them: `V2__add_bakong_fields.sql` adds two UNIQUE constraints, and without the plugin its migration state can only be inspected by booting the app. Add the plugin there before editing a payment migration.
 
 No linter or formatter is configured for the twelve Java modules. The frontend has one: **`oxlint`**, via `npm run lint` in `movie-frontend/`. There is no ESLint config despite the Vite React scaffold normally shipping one — do not add ESLint alongside it.
 
@@ -86,11 +88,12 @@ bash scripts/clean-test-data.sh   # removes what the test suites left behind
 
 `docker-compose.yml` starts MySQL, waits for it to actually accept connections, starts Eureka, waits for that, then starts the eleven services. `docker/mysql/init.sql` creates the nine databases and nothing else — every table in them is still Flyway's, applied at each service's startup.
 
-Three things differ from a local run and will bite otherwise:
+Four things differ from a local run and will bite otherwise:
 
 - **MySQL is published on `3307`, not `3306`**, because the local MySQL this project was developed against normally holds 3306. Inside the network it is still `mysql:3306`.
 - **Only `api-gateway` (8083), Eureka (8761) and MySQL (3307) are published.** The business services are reachable only on the internal network — publishing one would expose its `permitAll()` chain directly and skip authentication entirely. Add a `ports:` entry deliberately when you need to probe one.
-- **Configuration comes from environment variables, not the property files.** Compose sets `SPRING_DATASOURCE_URL`, `EUREKA_CLIENT_SERVICEURL_DEFAULTZONE` and `EUREKA_INSTANCE_PREFER_IP_ADDRESS`, so the checked-in config keeps pointing at `localhost` and a local run is unaffected. Copy `.env.example` to `.env` to override `MYSQL_ROOT_PASSWORD` and `JWT_SECRET`.
+- **Configuration comes from environment variables, not the property files.** Compose sets `SPRING_DATASOURCE_URL`, `EUREKA_CLIENT_SERVICEURL_DEFAULTZONE` and `EUREKA_INSTANCE_PREFER_IP_ADDRESS`, so the checked-in config keeps pointing at `localhost` and a local run is unaffected. Copy `.env.example` to `.env` to override `MYSQL_ROOT_PASSWORD`, `JWT_SECRET`, the `BAKONG_*` credentials and `CORS_ALLOWED_ORIGINS`.
+- **payment-service runs on a different clock.** Compose sets `TZ` (default `Asia/Phnom_Penh`) on that service alone, and a QR's `expires_at` and the countdown the customer sees are computed on it. A local run inherits the host's zone instead, so expiry timing drifts between the two.
 
 ### Locally (a subset of services)
 
@@ -149,9 +152,15 @@ npm run preview   # serve the built bundle
 
 `movie-frontend/README.md` is worth reading before changing the client. Besides the status-code contract below it records three gaps: no server-side ownership check, admin cannot be granted from the UI, and **seats have no hold timer** — selecting a seat books it immediately, so an abandoned `PENDING` booking holds that seat until someone cancels it.
 
-It talks **only to the gateway** (`VITE_API_URL`, default `http://localhost:8083`). Port 5173 is already in `cors.allowed-origins` (in `api-gateway/src/main/resources/application.yml`); a dev server on any other port is blocked by the browser until that list is changed.
+For **backend** data it talks only to the gateway (`VITE_API_URL`, default `http://localhost:8083`). Ports 5173 and 5174 are in `cors.allowed-origins` (in `api-gateway/src/main/resources/application.yml`) — Vite uses the second when the first is taken; a dev server on any other port is blocked by the browser until that list is changed.
 
-All `fetch` calls go through `src/api/client.js`, which attaches the bearer token, turns failures into an `ApiError` that **keeps the status code**, and retries once through `/api/auth/refresh` on a 401 — access tokens last 15 minutes, so that is routine rather than exceptional. Concurrent 401s share one in-flight refresh, otherwise four parallel requests start four refreshes and the last three present an already-rotated token.
+API calls go through `src/api/client.js` (plain `fetch` — `axios` is in `package.json` but nothing imports it, and neither does anything import `@tanstack/react-query` or `zustand`; what is actually used is `react-router-dom`, `lucide-react`, `react-hot-toast` and `qrcode.react`). It attaches the bearer token, turns failures into an `ApiError` that **keeps the status code**, and retries once through `/api/auth/refresh` on a 401 — access tokens last 15 minutes, so that is routine rather than exceptional. Concurrent 401s share one in-flight refresh, otherwise four parallel requests start four refreshes and the last three present an already-rotated token.
+
+**Posters and backdrops come straight from TMDB, not from this system.** `src/api/useTMDB.js` calls `api.themoviedb.org` from the browser with `VITE_TMDB_TOKEN` (a v4 Bearer read-access token, *not* a v3 API key), searching by movie title and keeping an in-memory cache. `MovieCard`, `MovieModal`, `Movies` and `Book` all use it. It is written to **degrade silently**: no token, a miss, or a network failure all return `null` and the UI just renders without artwork. So "the movies have no images" is almost always an unset or wrong `VITE_TMDB_TOKEN` and not a backend problem — and note that `movie-frontend/.env.example` documents only `VITE_API_URL`, so the variable has to be known rather than copied.
+
+Styling is **Tailwind v4 through `@tailwindcss/vite`** — configured CSS-first from `@import "tailwindcss"` in `src/index.css`. There is no `tailwind.config.js` and adding one is not how v4 is customised.
+
+The health views are the exception: `components/HealthTab.jsx` and the health-check helper in `api/endpoints.js` call `fetch` directly against a **hard-coded `http://localhost:8083`** (and `:8761`), ignoring `VITE_API_URL`. They show everything as DOWN against any other gateway.
 
 The UI reacts to status codes individually and should keep doing so: 401 refresh-then-sign-in, 403 hide the control, **409 reload the seat grid** (losing the race for a seat is a normal outcome, not an error), 502/503 retry.
 
@@ -169,18 +178,38 @@ POST /api/bookings
       seat AVAILABLE -> BOOKED, booking written as PENDING (201)
       seat not AVAILABLE -> 409, no booking row is written
 
-POST /api/payments                        payment PENDING
-PUT  /api/payments/{id}/paid
-  payment-service -> booking-service  PUT /api/bookings/{id}/confirm
-      booking PENDING -> CONFIRMED
+POST /api/payments/bakong {bookingId}
+  payment-service -> booking-service  GET /api/bookings/{id}
+      must be PENDING and owned by X-Auth-UserId (403 otherwise)
+  KHQR built with the NBC SDK for booking.totalAmount -> payment PENDING
+      (qr_string, md5, expires_at stored; an unexpired QR is re-used)
 
-PUT  /api/payments/{id}/failed|cancel|refund
-  payment-service -> booking-service  PUT /api/bookings/{id}/cancel
+GET  /api/payments/{id}/bakong/check     (browser polls every 3s)
+BakongPaymentSweeper @Scheduled          (every 30s, covers closed tabs)
+  payment-service -> Bakong Open API  POST /v1/check_transaction_by_md5
+      found + account/amount/currency match -> PENDING -> PAID (conditional UPDATE)
+          -> booking-service PUT /confirm -> booking CONFIRMED
+      not found and past expires_at + 30s -> PENDING -> EXPIRED
+          -> booking-service PUT /cancel -> seat released
+
+PUT  /api/payments/{id}/failed|cancel     (from PENDING only)
+PUT  /api/payments/{id}/refund|paid       (ADMIN; refund from PAID only)
+  payment-service -> booking-service  PUT /api/bookings/{id}/cancel|confirm
       booking -> CANCELLED, and booking-service releases the seat
       seat BOOKED -> AVAILABLE
 ```
 
-Three properties hold this together, and breaking any of them reintroduces double-booking:
+**Bakong is the source of truth for "paid".** No client can make a customer's payment PAID: `/paid` is ADMIN-only at the gateway, the amount is never taken from a request body (booking-service prices a booking from the reserved seat's `price`, payment-service charges the booking's total), and settlement needs the Bakong Open API to report a transaction for that QR's md5 into `bakong.account-id` for that exact amount. Three details carry this:
+
+- **Payment state changes are conditional UPDATEs** (`PaymentRepository.markPaidIfPending` / `compareAndSetStatus`), the same pattern as seats. The poller and the sweeper routinely see the same transaction at once; only the one that changes the row confirms the booking.
+- **`bakong_hash` and `md5` are both UNIQUE.** The first stops one bank transfer settling two payments; the second stops the same QR being stored against two payment rows.
+- **The money arriving is never undone.** If booking-service is down when a payment settles, the payment stays PAID with `booking_confirmed_at` NULL and the sweeper retries for 24h. If booking-service *refuses* (the booking was cancelled while the customer paid), it is logged for a manual refund.
+
+A Bakong outage changes nothing — "cannot check" is not "unpaid", so nothing is settled or expired until checks succeed again. Configuration is `bakong.*` in payment-service (`BAKONG_API_TOKEN`, `BAKONG_ACCOUNT_ID`, …); with either unset, `POST /api/payments/bakong` answers **503** rather than issuing a QR nobody could verify. The token expires about every 90 days, and the Open API may only answer from Cambodian IPs — a check that times out from elsewhere is that, not a bug. There is no sandbox: testing it end to end means a real, small payment.
+
+**`@EnableScheduling` on `PaymentServiceApplication` is the only scheduler in the repo**, and `BakongPaymentSweeper` is the only `@Scheduled`. Remove the annotation and the sweep stops *silently* — nothing fails and nothing is logged, but a customer who pays and closes the tab never gets a confirmed booking, and an expired QR never releases its seat. Only the 3s browser poll is left, which covers just the open checkout screen. `bakong.sweep-interval-ms` drives both `initialDelayString` and `fixedDelayString`, and it is `fixedDelay` rather than `fixedRate` so a slow Bakong response cannot stack sweeps.
+
+Four properties hold this together, and breaking any of them reintroduces double-booking:
 
 - **The reserve is a conditional UPDATE, not a read-then-write.** `SeatRepository.compareAndSetStatus` issues `UPDATE ... WHERE seat_id = ? AND status = ?` and checks the affected-row count. Zero rows means the caller lost the race. Loading the seat, checking `status` in Java, then saving would let two concurrent bookings both observe AVAILABLE.
 - **The user is validated before the seat is reserved.** The check has no side effect, so failing it costs nothing; doing it after the reservation would mean holding and releasing a seat for a request that was never going to succeed.
@@ -228,6 +257,10 @@ Every service has `exception/GlobalExceptionHandler` (a `@RestControllerAdvice`)
 | `InvalidCredentialsException` (auth) | 401 |
 | `SeatNotAvailableException` (seat) / `SeatUnavailableException` (booking) | 409 |
 | `InvalidBookingReferenceException` (booking) | 400 — the body names a user that does not exist |
+| `PaymentForbiddenException` (payment) | 403 — paying for someone else's booking |
+| `PaymentStateException` (payment) | 409 — booking already paid/cancelled, or payment not in the required state |
+| `BakongNotConfiguredException` (payment) | 503 — `BAKONG_API_TOKEN` / `BAKONG_ACCOUNT_ID` unset |
+| `BakongApiException` (payment) | 502 — a `RestClientException`; Bakong answered with an error such as an expired token |
 | `MethodArgumentNotValidException` | 400 — a `@Valid` body failed; every violation joined into `message` |
 | `HttpMessageNotReadableException` | 400 — body unparseable (bad JSON, or a value outside an enum) |
 | `MissingServletRequestParameterException` / `MethodArgumentTypeMismatchException` | 400 — a query parameter is absent or the wrong type |
@@ -303,7 +336,7 @@ There are no foreign keys between services — a reference is just an integer, a
 
 booking-service validates both of its own references: `seatId` via the reserve call, and `userId` via `GET /api/users/{id}` on user-service. A user-service outage therefore blocks new bookings (502) rather than letting them through unchecked — booking-service cannot distinguish "no such user" from "cannot check right now", and failing open would defeat the point of validating. `updateBooking` only re-checks when the owner actually changes.
 
-Still taken on trust: `Booking.showtimeId`, `Payment.bookingId`, `Seat.screenId`, and `Showtime.movieId`/`theaterId`/`screenId`.
+Still taken on trust: `Booking.showtimeId`, `Seat.screenId`, and `Showtime.movieId`/`theaterId`/`screenId`. `Booking.totalAmount` is no longer one of them — the request's value is ignored and the seat's `price` is used — and a Bakong payment's `bookingId` is checked against booking-service. The legacy `POST /api/payments` still accepts a client-supplied amount, but nothing that endpoint creates can reach PAID without an ADMIN.
 
 ### Service-to-service calls
 
@@ -314,7 +347,9 @@ Callers use `RestClient` against Eureka service ids. Every module that makes suc
 
 **Inject the load-balanced one with the `@LoadBalanced` qualifier on the constructor parameter.** Injecting `RestClient.Builder` by type alone silently resolves to the `@Primary` plain builder, and `http://SEAT-SERVICE` then has no resolver behind it. This was a live bug in admin-service.
 
-Current callers: `auth-service -> user-service` (profile creation on register), `admin-service -> user-service` (user listing), `booking-service -> seat-service` (reserve/release), `booking-service -> user-service` (userId validation), `payment-service -> booking-service` (confirm/cancel).
+Current callers: `auth-service -> user-service` (profile creation on register), `admin-service -> user-service` (user listing), `booking-service -> seat-service` (reserve/release), `booking-service -> user-service` (userId validation), `payment-service -> booking-service` (get/confirm/cancel).
+
+**`payment-service -> Bakong Open API` is the one call that leaves the cluster.** It uses a third builder, `bakongRestClientBuilder` (injected by `@Qualifier`), timed like the load-balanced one but *not* `@LoadBalanced` — that would try to resolve `api-bakong.nbc.gov.kh` as a Eureka service id. "Transaction not found" is a normal return (`Optional.empty()`), not an exception, so customers slow to scan never open the `bakong` breaker.
 
 `AuthServiceImpl.register` is a dual write across two databases and is `@Transactional`, so a failure of the user-service call rolls the credential row back rather than leaving `auth_db` and `user_db` out of step.
 
@@ -331,7 +366,7 @@ The gateway and auth-service must share `jwt.secret`; both read `${JWT_SECRET:<d
 
 auth-service additionally validates tokens itself and has `@EnableMethodSecurity`, which `AuthController.updateRole` uses. Its `JwtAuthenticationFilter` grants `ROLE_<role>` **from the persisted user row, not the token claim**, so a revoked role takes effect without waiting for the access token to expire.
 
-Downstream services keep `permitAll()` filter chains — they are not directly exposed and rely on the gateway. **This means running a service on its own port bypasses authentication entirely**, which is fine for local testing and not fine for deployment. admin-service needs its `SecurityConfig` `permitAll` bean specifically because it pulls in `spring-boot-starter-security`; without the bean Boot falls back to HTTP Basic with a generated password and `/api/admin/**` becomes unusable through the gateway.
+Downstream services keep `permitAll()` filter chains — they are not directly exposed and rely on the gateway. **This means running a service on its own port bypasses authentication entirely**, which is fine for local testing and not fine for deployment. That chain is not optional boilerplate: **nine modules pull in `spring-boot-starter-security`** (admin, auth, booking, payment, screen, seat, showtime, theater, user) and each therefore carries a `config/SecurityConfig`. Without the bean Boot falls back to HTTP Basic with a password generated into the startup log, and every call through the gateway gets a 401 from the service itself — which reads as an auth bug at the gateway and is not one. auth-service is the only one whose chain is restrictive rather than `permitAll`. movie-service is the one data service *without* the starter, so it needs no such bean; add one the moment that dependency appears.
 
 ### Identity across the two user tables
 
@@ -354,6 +389,8 @@ It travels as a **`userId` claim on the access token**, which the gateway forwar
 
 Origins are explicit (`cors.allowed-origins` in `application.yml`, default the Vite and CRA dev ports) because `allowCredentials` cannot be combined with `*`. Override with `CORS_ALLOWED_ORIGINS`.
 
+**Allowing another dev port is a gateway-only edit.** Vite falls back to 5174 when 5173 is taken, and that origin is rejected until it is listed — `docker compose` passes `CORS_ALLOWED_ORIGINS` through to api-gateway, so an override needs a recreate but no rebuild. Adding `@CrossOrigin` to a downstream controller does not work and makes things worse: the gateway answers the preflight before the request ever arrives, and the downstream annotation only adds a second `Access-Control-Allow-Origin` to the proxied response.
+
 **curl ignores CORS entirely**, so every script in `scripts/` can pass against an API no browser can call. `scripts/frontend-ready-check.sh` is the one that checks it, using a real preflight.
 
 ### Authorization
@@ -370,7 +407,8 @@ Two roles, `Role.USER` and `Role.ADMIN` — a real enum in auth-service, `@Enume
 | `/api/auth/users/**` (granting roles) | **ADMIN** |
 | `GET /api/users` (the full listing) | **ADMIN** |
 | `DELETE /api/users/**` | **ADMIN** |
-| bookings, payments, `/api/auth/profile`, a single user by id | any valid token |
+| `PUT /api/payments/*/paid`, `/status`, `/refund` (manual settlement) | **ADMIN** |
+| bookings, other payment calls, `/api/auth/profile`, a single user by id | any valid token |
 
 Wrong role is **403, not 401** — the caller proved who they are and a fresh token will not help.
 
@@ -386,7 +424,7 @@ UPDATE auth_db.users SET role = 'ADMIN' WHERE username = 'someone';
 
 **A role change is not visible at the gateway until the user logs in again.** The gateway has only the token claim to go on; auth-service reads the row. So a *promotion* takes effect at auth-service immediately but at the gateway only on a new token, and a **demotion leaves gateway-level ADMIN valid for up to the access-token lifetime (15 minutes)**. That is the cost of not giving the gateway a database, and it is why the access token is short-lived. `scripts/authz-check.sh` asserts this behaviour rather than papering over it.
 
-Still missing, and both need the same thing: **there is no ownership check anywhere.** Any authenticated user can cancel any booking or edit any user by id. Fixing it needs a mapping between the token's `username` (auth_db) and `Booking.userId` (user_db) — two separate databases with no link between them. That mapping is the prerequisite, not the check.
+Still missing: **ownership checks almost everywhere.** Any authenticated user can cancel any booking or edit any user by id. The one exception is `POST /api/payments/bakong`, which compares the booking's `userId` with `X-Auth-UserId` (see Identity across the two user tables above) — copy that when adding the rest.
 
 `POST /api/auth/logout` validates the refresh token and returns a message — **it revokes nothing.** There is no token store or blacklist, so both tokens stay usable until they expire (access 15 min, refresh 7 days). Real logout means adding revocation state; do not treat the endpoint as if it already provides it.
 
@@ -395,5 +433,7 @@ Still missing, and both need the same thing: **there is no ownership check anywh
 All twelve modules are on Spring Boot 4.1.0 / Spring Cloud 2025.1.2. They previously drifted (admin 4.0.0, payment 4.0.5, user's cloud train 2025.1.3) — keep them aligned when adding a module.
 
 Each module must import the `spring-cloud-dependencies` BOM itself; the Boot parent does not manage Spring Cloud versions, and without the BOM the Eureka client dependency has no version and Maven cannot read the project at all.
+
+`kh.gov.nbc.bakong_khqr:sdk-java` in payment-service is the **one hand-pinned version** in the repo (`1.0.0.17`) — no BOM manages it, so it is the only dependency whose version is a deliberate local choice rather than something to leave alone.
 
 `spring-boot-starter-web` and `spring-boot-starter-webmvc` both resolve on Boot 4 and both are in use — that inconsistency is cosmetic, not a bug. `spring-boot-starter-flyway` versus bare `flyway-core` is **not** cosmetic (see Schema ownership).
