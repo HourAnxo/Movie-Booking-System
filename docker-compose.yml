@@ -90,6 +90,11 @@ services:
     environment:
       <<: *common-env
       JWT_SECRET: ${JWT_SECRET:-my-super-secret-key-for-movie-theater-project-2026-minimum-32-characters}
+      # Browser origins allowed to call the API. The checked-in default in
+      # api-gateway's application.yml covers a local run; this passes an
+      # override through from .env for a deployed frontend or a dev server
+      # on another port.
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:5173,http://localhost:5174,http://localhost:3000}
 
   # ------------------------------------------------------------ business --
 
@@ -180,6 +185,14 @@ services:
     environment:
       <<: [*common-env, *db-env]
       SPRING_DATASOURCE_URL: "jdbc:mysql://mysql:3306/payment_db?allowPublicKeyRetrieval=true&useSSL=false"
+      # Real Bakong KHQR payments. Empty means POST /api/payments/bakong
+      # answers 503 — set them in .env (see .env.example).
+      BAKONG_API_TOKEN: ${BAKONG_API_TOKEN:-}
+      BAKONG_ACCOUNT_ID: ${BAKONG_ACCOUNT_ID:-}
+      BAKONG_MERCHANT_NAME: ${BAKONG_MERCHANT_NAME:-CineBook}
+      BAKONG_QR_TTL: ${BAKONG_QR_TTL:-5m}
+      # The customer's countdown and expires_at are computed on this clock.
+      TZ: ${TZ:-Asia/Phnom_Penh}
 
   admin-service:
     <<: *service

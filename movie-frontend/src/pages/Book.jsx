@@ -14,7 +14,9 @@ import { searchMovie, posterUrl } from '../api/useTMDB'
 import { CheckCircle2, Film, Building2, Monitor, Clock, ChevronRight, X } from 'lucide-react'
 import toast from 'react-hot-toast'
 
-const PRICE_PER_SEAT = 2.50
+// Display only. booking-service prices each booking from the seat row and
+// Bakong charges exactly that, so the summary must use the same number.
+const seatPrice = (seat) => Number(seat.price ?? 0)
 
 // Handle both seatId and id field names from backend
 const getSeatId = (seat) => seat.seatId ?? seat.id
@@ -212,7 +214,6 @@ export default function Book() {
                         userId: user.userId,
                         showtimeId: selectedShowtime.showtimeId,
                         seatId: getSeatId(seat),
-                        totalAmount: PRICE_PER_SEAT,
                     })
                     created.push(booking)
                 } catch (err) {
@@ -254,8 +255,9 @@ export default function Book() {
         : (showtimes ?? [])
 
     const available = seats?.filter((s) => s.status === 'AVAILABLE').length ?? 0
-    const totalPrice = (selectedSeats.length * PRICE_PER_SEAT).toFixed(2)
-    const totalKHR = Math.round(selectedSeats.length * PRICE_PER_SEAT * 4100).toLocaleString()
+    const totalAmount = selectedSeats.reduce((sum, s) => sum + seatPrice(s), 0)
+    const totalPrice = totalAmount.toFixed(2)
+    const totalKHR = Math.round(totalAmount * 4100).toLocaleString()
 
     return (
         <div>
@@ -492,7 +494,7 @@ export default function Book() {
 
                                 <div className="border-t border-gray-800 pt-3 mt-1 space-y-1.5">
                                     <div className="flex justify-between text-xs text-gray-500">
-                                        <span>{selectedSeats.length} seat(s) × $2.50</span>
+                                        <span>{selectedSeats.length} seat(s)</span>
                                         <span>${totalPrice}</span>
                                     </div>
                                     <div className="flex justify-between">

@@ -1,5 +1,6 @@
 package com.example.paymentservice.service;
 
+import com.example.paymentservice.dto.BakongPaymentResponseDTO;
 import com.example.paymentservice.dto.PaymentRequestDTO;
 import com.example.paymentservice.dto.PaymentResponseDTO;
 import com.example.paymentservice.entity.PaymentStatus;
@@ -43,4 +44,18 @@ public interface PaymentService {
     PaymentResponseDTO refundPayment(
             Integer id
     );
+
+    // ================= BAKONG =================
+
+    BakongPaymentResponseDTO createBakongPayment(
+            Integer bookingId,
+            Integer callerUserId,
+            boolean callerIsAdmin
+    );
+
+    BakongPaymentResponseDTO checkBakongPayment(
+            Integer paymentId
+    );
+
+    void sweepBakongPayments();
 }

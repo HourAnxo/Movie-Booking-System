@@ -6,5 +6,8 @@ public enum PaymentStatus {
     PAID,
     FAILED,
     CANCELLED,
-    REFUNDED
+    REFUNDED,
+
+    /** A Bakong QR nobody paid before it expired; its booking is cancelled. */
+    EXPIRED
 }

@@ -76,6 +76,13 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
             "/api/auth/users/**"
     );
 
+    /** Manual payment transitions — never reachable by a customer. */
+    private static final List<String> ADMIN_PAYMENT_PATHS = List.of(
+            "/api/payments/*/paid",
+            "/api/payments/*/status",
+            "/api/payments/*/refund"
+    );
+
     private static final String ADMIN_ROLE = "ADMIN";
 
     private static final Set<String> SPOOFABLE_HEADERS = Set.of(
@@ -207,6 +214,14 @@ public class JwtAuthenticationFilter extends OncePerRequestFilter {
         // that is what admin-service is for. A single user by id stays
         // open to any authenticated caller.
         if (HttpMethod.GET.matches(method) && "/api/users".equals(path)) {
+            return true;
+        }
+
+        // Settling a payment by hand. A customer's payment becomes PAID only
+        // when payment-service has seen the money arrive at Bakong; these
+        // are the operator's override for reconciliation, and before this
+        // any logged-in user could mark their own booking paid for free.
+        if (!readOnly && matchesAny(ADMIN_PAYMENT_PATHS, path)) {
             return true;
         }
 

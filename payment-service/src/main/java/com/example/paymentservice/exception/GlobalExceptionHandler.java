@@ -39,6 +39,30 @@ public class GlobalExceptionHandler {
         return build(HttpStatus.BAD_REQUEST, ex.getMessage(), request);
     }
 
+    @ExceptionHandler(PaymentForbiddenException.class)
+    public ResponseEntity<ErrorResponse> handleForbidden(
+            PaymentForbiddenException ex,
+            HttpServletRequest request
+    ) {
+        return build(HttpStatus.FORBIDDEN, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(PaymentStateException.class)
+    public ResponseEntity<ErrorResponse> handleConflict(
+            PaymentStateException ex,
+            HttpServletRequest request
+    ) {
+        return build(HttpStatus.CONFLICT, ex.getMessage(), request);
+    }
+
+    @ExceptionHandler(BakongNotConfiguredException.class)
+    public ResponseEntity<ErrorResponse> handleNotConfigured(
+            BakongNotConfiguredException ex,
+            HttpServletRequest request
+    ) {
+        return build(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), request);
+    }
+
     /**
      * A downstream service was unreachable or answered with an error.
      * 502 rather than 500 — this service is fine, its dependency is not.

@@ -1,6 +1,7 @@
 package com.example.paymentservice.config;
 
 
+import com.example.paymentservice.exception.ResourceNotFoundException;
 import io.github.resilience4j.circuitbreaker.CircuitBreakerConfig;
 import io.github.resilience4j.timelimiter.TimeLimiterConfig;
 import org.springframework.cloud.circuitbreaker.resilience4j.Resilience4JCircuitBreakerFactory;
@@ -27,7 +28,8 @@ import java.time.Duration;
  * trip the breaker and take the dependency out for everybody.
  */
 @Configuration
-public class ResilienceConfig {
+public class
+ResilienceConfig {
 
     // Opens once half the calls in the window fail, but only after enough
     // calls to be meaningful — without a minimum, the first failed call in
@@ -58,8 +60,11 @@ public class ResilienceConfig {
                         .failureRateThreshold(FAILURE_RATE_THRESHOLD)
                         .waitDurationInOpenState(WAIT_IN_OPEN_STATE)
                         .permittedNumberOfCallsInHalfOpenState(PROBES_WHEN_HALF_OPEN)
+                        // ResourceNotFoundException is booking-service's 404
+                        // translated: a correct answer, not an outage.
                         .ignoreExceptions(
-                                HttpClientErrorException.class
+                                HttpClientErrorException.class,
+                                ResourceNotFoundException.class
                         )
                         .build();
 

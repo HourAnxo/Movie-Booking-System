@@ -24,6 +24,8 @@
 
     <properties>
         <java.version>21</java.version>
+        <db.user>root</db.user>
+        <db.password>root</db.password>
         <spring-cloud.version>2025.1.2</spring-cloud.version>
         <lombok.version>1.18.42</lombok.version>
     </properties>
@@ -146,6 +148,31 @@
 
     <build>
         <plugins>
+
+            <!-- Enables mvn flyway:info / flyway:repair / flyway:validate -->
+            <plugin>
+                <groupId>org.flywaydb</groupId>
+                <artifactId>flyway-maven-plugin</artifactId>
+                <version>11.14.1</version>
+                <configuration>
+                    <url>jdbc:mysql://localhost:3306/booking_db</url>
+                    <user>${db.user}</user>
+                    <password>${db.password}</password>
+                </configuration>
+                <dependencies>
+                    <dependency>
+                        <groupId>org.flywaydb</groupId>
+                        <artifactId>flyway-mysql</artifactId>
+                        <version>11.14.1</version>
+                    </dependency>
+                    <dependency>
+                        <groupId>com.mysql</groupId>
+                        <artifactId>mysql-connector-j</artifactId>
+                        <version>9.4.0</version>
+                    </dependency>
+                </dependencies>
+            </plugin>
+
             <plugin>
                 <groupId>org.apache.maven.plugins</groupId>
                 <artifactId>maven-compiler-plugin</artifactId>

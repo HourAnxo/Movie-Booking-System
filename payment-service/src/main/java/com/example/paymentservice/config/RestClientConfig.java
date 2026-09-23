@@ -51,6 +51,27 @@ public class RestClientConfig {
     @Bean
     @LoadBalanced
     public RestClient.Builder loadBalancedRestClientBuilder() {
+        return timedBuilder();
+    }
+
+    /**
+     * For the Bakong Open API — the one outbound call that leaves the
+     * cluster. It must NOT be @LoadBalanced: that would try to resolve
+     * api-bakong.nbc.gov.kh as a Eureka service id and fail. It must not be
+     * the untimed @Primary builder either, because a hung Bakong call would
+     * pin a request thread per polling browser.
+     *
+     * Inject with @Qualifier(BAKONG_REST_CLIENT_BUILDER).
+     */
+    @Bean(BAKONG_REST_CLIENT_BUILDER)
+    public RestClient.Builder bakongRestClientBuilder() {
+        return timedBuilder();
+    }
+
+    public static final String BAKONG_REST_CLIENT_BUILDER =
+            "bakongRestClientBuilder";
+
+    private static RestClient.Builder timedBuilder() {
 
         HttpClientSettings settings =
                 HttpClientSettings.defaults()
