@@ -553,3 +553,20 @@ Frontend lint: `npm run lint` (oxlint) in `movie-frontend/`.
 | Role changes lag at the gateway | A demoted admin keeps gateway-level ADMIN until their token expires |
 | First admin needs SQL | No bootstrap mechanism |
 | Frontend not containerised | `docker compose` runs only the backend |
+
+---
+
+## 12. Lessons learned
+
+Bugs that shaped the current design. Each one failed silently, which is why the
+rule it produced is written down.
+
+| What went wrong | What it looked like | The rule now |
+| --- | --- | --- |
+| Four services depended on bare `flyway-core` | Boot 4 never ran their migrations; their databases had no `flyway_schema_history` and the tables existed only because someone had created them by hand | Every data service uses `spring-boot-starter-flyway`, which carries the auto-configuration |
+| `role` was free text in `auth_db.users` | A hand-typed `"Admin"` produced the authority `ROLE_Admin`; every `hasRole('ADMIN')` returned false while the account looked promoted | `Role` is an enum, backed by the `chk_users_role` CHECK constraint (auth `V2`) |
+| The id user-service returned on register was discarded | An authenticated caller had a username but no way to name the user a booking was for, so the booking flow could not be reached from a client | `auth_db.users.profile_id` (auth `V3`), carried as the `userId` claim and the `X-Auth-UserId` header |
+| Container health was a `/dev/tcp` probe | It only proved the port was open, which is true long before the service can serve a request and stays true after its database has gone | `HEALTHCHECK` curls `/actuator/health` and requires `"status":"UP"` |
+| auth-service's restrictive chain did not permit `/actuator/health` | The container sat `unhealthy` because its own health check got a 403 | auth-service's `SecurityConfig` permits `/actuator/health` explicitly |
+| admin-service injected `RestClient.Builder` by type | It got the `@Primary` plain builder, and `http://USER-SERVICE` had nothing to resolve it | Inject with `@LoadBalanced` on the constructor parameter |
+| Versions drifted (admin on Boot 4.0.0, payment on 4.0.5, user on Cloud 2025.1.3) | — | All twelve modules stay on one Boot and one Cloud version |
