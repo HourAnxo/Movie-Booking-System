@@ -285,6 +285,41 @@ sequenceDiagram
 join a local transaction, so the compensating release does the job of a
 rollback.
 
+Smaller rules in the same spirit: `confirmBooking` refuses a `CANCELLED`
+booking (400); `deleteBooking` releases the seat unless the booking is already
+`CANCELLED`, because a hard delete leaves no row to reconcile from; and
+`updateBooking` never changes `seatId` — moving seats means cancel and re-book.
+
+### Why payment is built this way
+
+Bakong is the only source of truth for "paid".
+
+1. **No client can make a payment PAID.** Amounts never come from a request
+   body: the booking is priced from the seat's `price`, and the payment charges
+   the booking's total. A payment settles only when Bakong reports that QR's
+   md5 paid into `bakong.account-id` for exactly that amount and currency.
+   `PUT /paid` exists, but only for an ADMIN.
+2. **State changes are conditional UPDATEs** (`markPaidIfPending`,
+   `compareAndSetStatus`). The browser poller and the server sweeper often see
+   the same transaction at the same moment; only the one whose UPDATE changes
+   the row goes on to confirm the booking.
+3. **`bakong_hash` and `md5` are UNIQUE**, so one transfer can't settle two
+   payments and one QR can't be stored against two rows.
+4. **Money arriving is never undone.** If booking-service is down when a
+   payment settles, the payment stays PAID with `booking_confirmed_at` NULL and
+   the sweeper retries the confirm for 24h. If booking-service refuses (the
+   booking was cancelled while the customer was paying), it's logged for a
+   manual refund.
+5. **"Cannot check" is not "unpaid".** During a Bakong outage nothing settles
+   and nothing expires. The Open API may only answer Cambodian IPs, so a
+   timeout from elsewhere isn't a bug. "Transaction not found" is returned as
+   `Optional.empty()`, not an exception, so slow scanners never open the
+   `bakong` circuit breaker.
+6. **The sweeper uses `fixedDelay`, not `fixedRate`**, so slow Bakong calls
+   can't stack up. It depends on `@EnableScheduling`; without it nothing fails
+   and nothing is logged, but closed-tab payments never confirm and expired
+   QRs never release their seats.
+
 ---
 
 ## 5. Security
@@ -329,6 +364,11 @@ Decided at the gateway:
 Configured **only** in `api-gateway`'s `CorsConfig`, at highest precedence, so
 a browser's preflight `OPTIONS` is answered before the JWT filter can reject it.
 Origins come from `cors.allowed-origins` in the gateway's `application.yml`.
+
+Adding CORS anywhere downstream (including `@CrossOrigin`) would add a second
+`Access-Control-Allow-Origin` header, and browsers reject a response that has
+two. Origins are listed explicitly because `allowCredentials` can't be combined
+with `*`.
 
 ### 5.4 Known security gaps
 
@@ -416,7 +456,16 @@ Conventions:
 - DTOs are Java `record`s, except in user-service and admin-service (plain
   classes).
 - Every `@RequestBody` is `@Valid`; `@Size` limits match column widths, so bad
-  input becomes a clear 400 instead of a database 500.
+  input becomes a clear 400 instead of a database 500. Without
+  `spring-boot-starter-validation` the annotations compile but nothing
+  enforces them.
+  - `status` on `SeatRequestDTO` and `MovieRequestDTO` is nullable on purpose:
+    `null` means "use the default" on create and "leave it alone" on update.
+  - Cross-field rules are `@AssertTrue` methods
+    (`ShowtimeRequestDTO.isEndAfterStartTime()`) that return `true` when either
+    field is null, because `@NotNull` already reports that.
+  - Login and refresh DTOs check presence only. A length rule at login would
+    reveal the registration policy and lock out older credentials.
 - Schema changes are **Flyway migrations** (`src/main/resources/db/migration/V<n>__*.sql`);
   Hibernate only validates (`ddl-auto=validate`). Never edit an applied
   migration — add a new one.
