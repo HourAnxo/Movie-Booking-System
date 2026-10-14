@@ -28,7 +28,7 @@ Each of these fails silently or reintroduces double-booking. Later sections add 
 
 There is **no wrapper at the root**, only inside each module. System Maven 3.9.11 is on `PATH`.
 
-**`java` and `JAVA_HOME` are JDK 26, but every module targets Java 21.** A JDK-26 build doesn't fail with a toolchain error. Lombok's processor just stops running, and you get a wall of `cannot find symbol: method getUsername()` from correct code. Use the JDK 21 that is installed:
+**`java` and `JAVA_HOME` are JDK 26, but every module targets Java 21.** A JDK-26 build doesn't fail with a toolchain error. Lombok's processor just stops running, and you get a wall of `cannot find symbol: method getUsername()` from correct code. Use the JDK 21 that is installed. The wrappers read `JAVA_HOME` too, and the variable lasts only for the shell that set it, so **set it in every separate command** (from Bash: `JAVA_HOME="C:/Users/MSI/.jdks/ms-21.0.12" ./mvnw ...`):
 
 ```powershell
 $env:JAVA_HOME = "C:\Users\MSI\.jdks\ms-21.0.12"; mvn clean install   # all 12 modules
@@ -39,20 +39,22 @@ mvn -pl auth-service install     # one module
 Per module, prefer its wrapper (`.\mvnw.cmd` in PowerShell, `./mvnw` from Bash):
 
 ```powershell
+$env:JAVA_HOME = "C:\Users\MSI\.jdks\ms-21.0.12"
 cd auth-service
 .\mvnw.cmd spring-boot:run
 .\mvnw.cmd test -Dtest=AuthServiceApplicationTests               # one class
 .\mvnw.cmd test -Dtest=AuthServiceApplicationTests#contextLoads  # one method
 ```
 
-**Flyway without booting the app:** all nine data services have `flyway-maven-plugin` (credentials `root`/`root` via `db.user` / `db.password`):
+**Flyway without booting the app:** all nine data services have `flyway-maven-plugin` (credentials `root`/`root` via `db.user` / `db.password`). **Run it inside a data-service module.** From the root it stops at discovery-server, which has no datasource, with `Unable to connect to the database`:
 
 ```powershell
+cd payment-service
 mvn flyway:info      # what has been applied
 mvn flyway:repair    # realign checksums after editing an applied migration
 ```
 
-The plugin URL is hard-coded to **`localhost:3306`** (the local MySQL). For the compose stack, override it, e.g. `-Dflyway.url=jdbc:mysql://localhost:3307/booking_db`. Otherwise you read a different database.
+The plugin URL is hard-coded to **`localhost:3306`** (the local MySQL). For the compose stack, override it, e.g. `"-Dflyway.url=jdbc:mysql://localhost:3307/booking_db"`. Otherwise you read a different database. Keep the quotes in PowerShell: it splits an unquoted `-Dname.with.dots=value` at the first dot.
 
 **Always `mvn clean` after renaming or deleting a migration.** `target/classes/db/migration` isn't pruned, so a stale `V2__old_name.sql` sits beside its replacement and Flyway sees two V2s.
 
@@ -60,7 +62,9 @@ The plugin URL is hard-coded to **`localhost:3306`** (the local MySQL). For the 
 
 ### Tests
 
-**Every test but one is a `@SpringBootTest` `contextLoads` smoke test.** It boots the full context, so it needs that service's MySQL database *and* Eureka reachable. `mvn test` is really a check that all twelve services can start.
+**Every test but one is a `@SpringBootTest` `contextLoads` smoke test.** It boots the full context, so a data service needs its database on the local MySQL (3306); discovery-server, api-gateway and admin-service have none. Eureka doesn't have to be up: the client only logs `Connection refused` and the test still passes. `mvn test` is really a check that all twelve services can start.
+
+**Booting the context runs Flyway**, so a test run applies any pending migration to the local database for real.
 
 The exception is **`SeatReservationConcurrencyTest`** in seat-service. It needs **Docker** (Testcontainers MySQL, Eureka client off), not the local MySQL. It releases sixteen threads against one AVAILABLE seat, and exactly one must win:
 
@@ -88,10 +92,12 @@ Differences from a local run:
 
 - **MySQL is on host port `3307`** (the local MySQL holds 3306). Inside the network it's `mysql:3306`.
 - **Only api-gateway (8083), Eureka (8761) and MySQL (3307) are published.** Publishing a business service exposes its `permitAll()` chain and skips authentication. Add a `ports:` entry only deliberately, for probing.
-- **Config comes from environment variables** (`SPRING_DATASOURCE_URL`, `EUREKA_CLIENT_SERVICEURL_DEFAULTZONE`, `EUREKA_INSTANCE_PREFER_IP_ADDRESS`). The checked-in properties keep pointing at `localhost`. Copy `.env.example` to `.env` to override `MYSQL_ROOT_PASSWORD`, `JWT_SECRET`, `BAKONG_*` and `CORS_ALLOWED_ORIGINS`.
+- **Config comes from environment variables** (`SPRING_DATASOURCE_URL`, `EUREKA_CLIENT_SERVICEURL_DEFAULTZONE`, `EUREKA_INSTANCE_PREFER_IP_ADDRESS`). The checked-in properties keep pointing at `localhost`. Copy `.env.example` to `.env` to override `MYSQL_ROOT_PASSWORD`, `JWT_SECRET`, `BAKONG_*`. Compose also reads `CORS_ALLOWED_ORIGINS` and `TZ` from `.env`, though the template doesn't list them.
 - **payment-service alone gets `TZ`** (default `Asia/Phnom_Penh`). A QR's `expires_at` is computed on it; a local run uses the host's zone.
 
 ### Verification scripts (against a running stack)
+
+Run each from the repo root with `bash scripts/<name>.sh`. They need `curl`, and all but `frontend-ready-check.sh` go through `docker compose exec` (MySQL as `root`/`root`), so they work against the compose stack only, not a local run. Three disrupt it: `resilience-check.sh` stops user-service, `health-check.sh` stops MySQL, and `clean-test-data.sh` deletes every booking, payment and user account.
 
 | Script | Proves |
 | --- | --- |
@@ -143,7 +149,8 @@ npm run build | lint | preview
 - **Posters come from TMDB in the browser** (`src/api/useTMDB.js`, `VITE_TMDB_TOKEN` in `movie-frontend/.env`, a v4 Bearer token, not a v3 key). It degrades silently to `null`, so "no images" almost always means the token is unset or wrong.
 - **Tailwind v4 via `@tailwindcss/vite`**, configured CSS-first in `src/index.css`. Don't add a `tailwind.config.js`.
 - **`components/HealthTab.jsx` and the health helper in `api/endpoints.js`** hard-code `localhost:8083` / `:8761` and ignore `VITE_API_URL`.
-- **CORS allows only ports 5173 and 5174** (`cors.allowed-origins` in the gateway's `application.yml`, override with `CORS_ALLOWED_ORIGINS`; recreate the container, no rebuild). Any other dev port is blocked until listed.
+- **`payments.createBakong` shares one in-flight promise per booking** (`api/endpoints.js`), so StrictMode's double effect sends one POST. The server enforces the same rule; don't drop either side.
+- **CORS allows only `localhost` ports 5173, 5174 and 3000** (override with `CORS_ALLOWED_ORIGINS`; recreate the container, no rebuild). Any other dev port is blocked until listed. The default list is written three times: `cors.allowed-origins` in the gateway's `application.yml`, the `@Value` fallback in `CorsConfig`, and `docker-compose.yml`. Change all three.
 - **Known gaps:** no ownership checks, admin can't be granted from the UI, and no seat hold timer. A selected seat is booked immediately, so an abandoned `PENDING` booking holds it until cancelled.
 
 ## Architecture
@@ -181,9 +188,9 @@ The reasoning behind each rule below is in `docs/project-overview.md` §4.
 **Payment rules** (Bakong is the source of truth for "paid"):
 
 - **Amounts never come from a request body.** Booking price = seat `price`; payment charges the booking total. Only ADMIN can call `/paid`.
-- **`bakong_hash` and `md5` are UNIQUE.**
+- **`bakong_hash` and `md5` are UNIQUE.** So is `live_qr_booking_id` (payment `V3`, a generated column, not mapped on the entity): at most one PENDING QR per booking. `createBakongPayment` catches the violation and returns the winner's QR, because concurrent creates (double click, StrictMode) are normal.
 - **Money arriving is never undone.** If the confirm fails, the payment stays PAID with `booking_confirmed_at` NULL and the sweeper retries for 24h. A refused confirm (booking cancelled mid-payment) is logged for manual refund.
-- **"Cannot check" isn't "unpaid":** a Bakong outage settles and expires nothing. Unset `BAKONG_API_TOKEN` / `BAKONG_ACCOUNT_ID` → `POST /api/payments/bakong` returns **503**. The token expires about every 90 days. The Open API may only answer Cambodian IPs. There is no sandbox; end-to-end testing means a real, small payment.
+- **"Cannot check" isn't "unpaid":** a Bakong outage settles and expires nothing. Unset `BAKONG_API_TOKEN` / `BAKONG_ACCOUNT_ID` → `POST /api/payments/bakong` returns **503**. The token expires about every 90 days. The Open API may only answer Cambodian IPs. There is no sandbox; end-to-end testing means a real, small payment, or **`BAKONG_MOCK=true`**: no token needed, the Open API is never called, QRs are built for `cinebook@mock`, and `POST /api/payments/{id}/bakong/simulate` (404 when off; the checkout shows a "Simulate payment" button) settles through the normal `settle` → confirm path.
 - `BakongPaymentSweeper` is the only scheduler in the repo. `bakong.sweep-interval-ms` sets both the initial delay and `fixedDelay` (keep it `fixedDelay`, not `fixedRate`).
 
 ### Layering (house style)
@@ -283,11 +290,11 @@ A wrong role is **403**, not 401.
 - **Internal calls never pass through the gateway**, so gateway rules don't affect them: seat reserve/release, booking confirm/cancel from payment-service, and `POST /api/users` from auth-service. Check this before adding a rule; a path that looks like a user action may be an internal one.
 - **`PUT /api/auth/users/{username}/role` is the only way to grant a role.** It has `@PreAuthorize("hasRole('ADMIN')")`, enforced by auth-service independently of the gateway. **The first admin needs SQL:** `UPDATE auth_db.users SET role = 'ADMIN' WHERE username = '...';`
 - **The gateway only sees role changes on a new token.** A promotion needs a re-login, and a **demotion keeps gateway-level ADMIN for up to 15 minutes** (the access-token lifetime). `authz-check.sh` asserts this.
-- **Ownership checks are mostly missing.** Any user can cancel any booking or edit any user by id. The exception is `POST /api/payments/bakong`, which compares the booking's `userId` with `X-Auth-UserId`; copy that pattern.
+- **Ownership checks are mostly missing.** Any user can cancel any booking or edit any user by id. The exceptions are `POST /api/payments/bakong` and `POST /api/payments/{id}/bakong/simulate` (ADMIN exempt), which compare the booking's `userId` with `X-Auth-UserId`; copy that pattern.
 - **`POST /api/auth/logout` revokes nothing.** There's no token store, so tokens stay valid until they expire (access 15 min, refresh 7 days).
 
 ### Version alignment
 
 All twelve modules are on **Spring Boot 4.1.0 / Spring Cloud 2025.1.2**; keep new modules aligned. Each module imports the `spring-cloud-dependencies` BOM itself. Without it the Eureka client has no version and Maven can't read the project.
 
-The only hand-pinned dependency is **`kh.gov.nbc.bakong_khqr:sdk-java` `1.0.0.17`** in payment-service; no BOM manages it. `spring-boot-starter-web` and `-webmvc` are both used, which is harmless.
+The only hand-pinned runtime dependency is **`kh.gov.nbc.bakong_khqr:sdk-java` `1.0.0.17`** in payment-service; no BOM manages it. The build-time `flyway-maven-plugin` (and its `flyway-mysql` dependency) is pinned to **11.14.1** in all nine data services, while Boot 4.1.0 runs Flyway **12.4.0** at startup; bump them together if `flyway:info`/`repair` ever disagrees with what the app applied. `spring-boot-starter-web` and `-webmvc` are both used, which is harmless.

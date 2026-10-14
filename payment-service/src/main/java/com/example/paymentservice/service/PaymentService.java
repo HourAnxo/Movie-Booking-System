@@ -57,5 +57,11 @@ public interface PaymentService {
             Integer paymentId
     );
 
+    BakongPaymentResponseDTO simulateBakongPayment(
+            Integer paymentId,
+            Integer callerUserId,
+            boolean callerIsAdmin
+    );
+
     void sweepBakongPayments();
 }

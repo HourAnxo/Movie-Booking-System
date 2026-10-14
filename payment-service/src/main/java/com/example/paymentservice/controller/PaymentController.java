@@ -86,6 +86,28 @@ public class PaymentController {
 
 
     // =========================
+    // SIMULATE BAKONG PAYMENT — mock mode only (404 otherwise)
+    // =========================
+    @PostMapping("/{id}/bakong/simulate")
+    public ResponseEntity<BakongPaymentResponseDTO> simulateBakongPayment(
+            @PathVariable Integer id,
+            @RequestHeader(value = "X-Auth-UserId", required = false)
+            Integer callerUserId,
+            @RequestHeader(value = "X-Auth-Role", required = false)
+            String callerRole
+    ) {
+
+        return ResponseEntity.ok(
+                paymentService.simulateBakongPayment(
+                        id,
+                        callerUserId,
+                        "ADMIN".equals(callerRole)
+                )
+        );
+    }
+
+
+    // =========================
     // GET ALL PAYMENTS
     // =========================
     @GetMapping

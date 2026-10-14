@@ -28,6 +28,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.util.List;
 import java.util.Optional;
+import java.util.UUID;
 
 @Service
 public class PaymentServiceImpl implements PaymentService {
@@ -340,7 +341,23 @@ public class PaymentServiceImpl implements PaymentService {
                 .updatedAt(now)
                 .build();
 
-        return mapToBakongResponse(paymentRepository.save(payment));
+        try {
+            return mapToBakongResponse(paymentRepository.save(payment));
+        } catch (DataIntegrityViolationException ex) {
+            // A concurrent request for the same booking saved its QR first
+            // (uk_payments_live_qr, or uk_payments_md5 when both QRs came
+            // out identical). Hand back that one: never two live QRs.
+            return paymentRepository
+                    .findByBookingIdAndPaymentStatus(bookingId, PaymentStatus.PENDING)
+                    .stream()
+                    .filter(existing -> existing.getMd5() != null)
+                    .findFirst()
+                    .map(this::mapToBakongResponse)
+                    .orElseThrow(() -> new PaymentStateException(
+                            "Booking " + bookingId
+                                    + " already has a QR being issued; try again"
+                    ));
+        }
     }
 
     /**
@@ -369,6 +386,71 @@ public class PaymentServiceImpl implements PaymentService {
         }
 
         return mapToBakongResponse(payment);
+    }
+
+    /**
+     * Mock mode only: pretend the customer paid this QR in full. Builds the
+     * transaction the real Bakong would report and settles through the same
+     * path, so the booking is confirmed exactly as for real money.
+     *
+     * 404 unless bakong.mock is on, so the endpoint does not exist in a real
+     * deployment.
+     */
+    @Override
+    public BakongPaymentResponseDTO simulateBakongPayment(
+            Integer paymentId,
+            Integer callerUserId,
+            boolean callerIsAdmin
+    ) {
+
+        if (!bakongProperties.mock()) {
+            throw new ResourceNotFoundException(
+                    "Simulated payments are only available in Bakong mock mode"
+            );
+        }
+
+        Payment payment = findPaymentById(paymentId);
+
+        if (payment.getMd5() == null) {
+            throw new IllegalArgumentException(
+                    "Payment " + paymentId + " is not a Bakong payment"
+            );
+        }
+
+        if (!callerIsAdmin) {
+            BookingDTO booking =
+                    bookingServiceClient.getBooking(payment.getBookingId());
+
+            if (callerUserId == null || !callerUserId.equals(booking.userId())) {
+                throw new PaymentForbiddenException(
+                        "Booking " + payment.getBookingId()
+                                + " does not belong to the caller"
+                );
+            }
+        }
+
+        if (payment.getPaymentStatus() != PaymentStatus.PENDING) {
+            throw new PaymentStateException(
+                    "Payment " + paymentId + " is "
+                            + payment.getPaymentStatus() + " and cannot be paid"
+            );
+        }
+
+        String hash = "MOCK-" + UUID.randomUUID();
+
+        settle(payment, new BakongTransactionDTO(
+                hash,
+                "customer@mock",
+                bakongProperties.accountId(),
+                payment.getCurrency(),
+                payment.getAmount(),
+                "Simulated payment",
+                System.currentTimeMillis(),
+                System.currentTimeMillis(),
+                null
+        ));
+
+        return mapToBakongResponse(findPaymentById(paymentId));
     }
 
     /**
@@ -631,7 +713,8 @@ public class PaymentServiceImpl implements PaymentService {
                                 payment.getExpiresAt()).toSeconds())
                         : 0,
                 payment.getPaidAt(),
-                payment.getTransactionId()
+                payment.getTransactionId(),
+                bakongProperties.mock()
         );
     }
 }

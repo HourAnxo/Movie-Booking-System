@@ -5,6 +5,8 @@ import com.example.paymentservice.config.RestClientConfig;
 import com.example.paymentservice.dto.BakongCheckResponseDTO;
 import com.example.paymentservice.dto.BakongTransactionDTO;
 import com.example.paymentservice.exception.BakongApiException;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreaker;
 import org.springframework.cloud.client.circuitbreaker.CircuitBreakerFactory;
@@ -39,8 +41,12 @@ public class BakongApiClient {
     /** Bakong's errorCode for "the transaction exists but failed". */
     private static final int TRANSACTION_FAILED = 3;
 
+    private static final Logger log =
+            LoggerFactory.getLogger(BakongApiClient.class);
+
     private final RestClient restClient;
     private final CircuitBreaker circuitBreaker;
+    private final boolean mock;
 
     public BakongApiClient(
             @Qualifier(RestClientConfig.BAKONG_REST_CLIENT_BUILDER)
@@ -57,6 +63,12 @@ public class BakongApiClient {
                 .build();
 
         this.circuitBreaker = circuitBreakerFactory.create("bakong");
+        this.mock = properties.mock();
+
+        if (mock) {
+            log.warn("BAKONG MOCK MODE: no real payments are checked; "
+                    + "QRs are settled by POST /api/payments/{id}/bakong/simulate");
+        }
     }
 
     /**
@@ -66,6 +78,12 @@ public class BakongApiClient {
      *         (or the attempt failed at the bank, which is also "not paid")
      */
     public Optional<BakongTransactionDTO> checkTransactionByMd5(String md5) {
+
+        // Mock mode: the fake bank never reports a transaction on its own.
+        // A simulated payment settles the QR directly instead.
+        if (mock) {
+            return Optional.empty();
+        }
 
         return circuitBreaker.run(
                 () -> doCheck(md5),

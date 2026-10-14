@@ -34,7 +34,11 @@ public record BakongPaymentResponseDTO(
 
         LocalDateTime paidAt,
 
-        String transactionId
+        String transactionId,
+
+        // True when payment-service runs a fake Bakong: the checkout screen
+        // then offers "simulate payment" instead of waiting for a bank app.
+        boolean mock
 
 ) {
 }

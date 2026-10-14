@@ -304,7 +304,14 @@ Bakong is the only source of truth for "paid".
    the same transaction at the same moment; only the one whose UPDATE changes
    the row goes on to confirm the booking.
 3. **`bakong_hash` and `md5` are UNIQUE**, so one transfer can't settle two
-   payments and one QR can't be stored against two rows.
+   payments and one QR can't be stored against two rows. So is
+   `live_qr_booking_id` (payment `V3`): a stored generated column that holds
+   the booking id only while the row is a PENDING Bakong QR, because MySQL has
+   no partial unique index. Two creates arriving together (a double click,
+   React StrictMode) both pass the "is there a live QR?" check; the loser now
+   hits the constraint and `createBakongPayment` returns the winner's QR
+   instead of issuing a second one. The column isn't mapped on the entity,
+   which `ddl-auto=validate` allows.
 4. **Money arriving is never undone.** If booking-service is down when a
    payment settles, the payment stays PAID with `booking_confirmed_at` NULL and
    the sweeper retries the confirm for 24h. If booking-service refuses (the
@@ -363,7 +370,8 @@ Decided at the gateway:
 
 Configured **only** in `api-gateway`'s `CorsConfig`, at highest precedence, so
 a browser's preflight `OPTIONS` is answered before the JWT filter can reject it.
-Origins come from `cors.allowed-origins` in the gateway's `application.yml`.
+Origins come from `cors.allowed-origins` in the gateway's `application.yml`
+(`localhost` ports 5173, 5174 and 3000 by default).
 
 Adding CORS anywhere downstream (including `@CrossOrigin`) would add a second
 `Access-Control-Allow-Origin` header, and browsers reject a response that has
@@ -477,7 +485,8 @@ Current migrations:
 | auth | V1 users · V2 constrain role to USER/ADMIN · V3 add profile_id |
 | movie | V1 movies · V2 add status |
 | seat | V1 seats · V2 normalise status · V3 add price |
-| user, theater, screen, showtime, booking, payment | V1 only |
+| payment | V1 payments · V2 add Bakong fields · V3 one live QR per booking |
+| user, theater, screen, showtime, booking | V1 only |
 
 ---
 
@@ -576,7 +585,7 @@ docker compose down -v   # stop and wipe the database
 
 | What | How | Needs |
 | --- | --- | --- |
-| Context-load smoke tests (all 12) | `mvn clean test` | MySQL + Eureka running |
+| Context-load smoke tests (all 12) | `mvn clean test` | local MySQL (Eureka optional; applies pending migrations) |
 | Seat race-condition test | `cd seat-service; .\mvnw.cmd test -Dtest=SeatReservationConcurrencyTest` | Docker (Testcontainers) |
 | End-to-end API check | `bash scripts/smoke-test.sh` | running stack |
 | Timeouts & circuit breaker | `bash scripts/resilience-check.sh` | running stack |
