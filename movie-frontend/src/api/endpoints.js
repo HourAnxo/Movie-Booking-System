@@ -43,11 +43,26 @@ export const bookings = {
     cancel: (id) => put(`/api/bookings/${id}/cancel`),
 }
 
+// One in-flight QR request per booking. StrictMode runs the checkout effect
+// twice in dev; both runs share this promise instead of racing two POSTs.
+const bakongInFlight = new Map()
+
 export const payments = {
     // Issues a real KHQR. The amount is the booking's own; it is not sent.
-    createBakong: (bookingId) => post('/api/payments/bakong', { bookingId }),
+    createBakong: (bookingId) => {
+        if (!bakongInFlight.has(bookingId)) {
+            bakongInFlight.set(
+                bookingId,
+                post('/api/payments/bakong', { bookingId })
+                    .finally(() => bakongInFlight.delete(bookingId)),
+            )
+        }
+        return bakongInFlight.get(bookingId)
+    },
     // Asks payment-service to check with Bakong; poll until status is final.
     checkBakong: (id) => get(`/api/payments/${id}/bakong/check`),
+    // Mock mode only (payment-service BAKONG_MOCK=true): settles the QR as paid.
+    simulateBakong: (id) => post(`/api/payments/${id}/bakong/simulate`),
     cancel: (id) => put(`/api/payments/${id}/cancel`),
 }
 

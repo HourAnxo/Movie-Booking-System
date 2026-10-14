@@ -191,6 +191,7 @@ services:
       BAKONG_ACCOUNT_ID: ${BAKONG_ACCOUNT_ID:-}
       BAKONG_MERCHANT_NAME: ${BAKONG_MERCHANT_NAME:-CineBook}
       BAKONG_QR_TTL: ${BAKONG_QR_TTL:-5m}
+      BAKONG_MOCK: ${BAKONG_MOCK:-false}
       # The customer's countdown and expires_at are computed on this clock.
       TZ: ${TZ:-Asia/Phnom_Penh}
 

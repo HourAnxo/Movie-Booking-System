@@ -22,6 +22,7 @@ export default function BakongModal({ booking, onClose, onSuccess }) {
     const [payment, setPayment] = useState(null)
     const [error, setError] = useState(null)
     const [checking, setChecking] = useState(false)
+    const [simulating, setSimulating] = useState(false)
     const [remaining, setRemaining] = useState(0)
     const doneTimer = useRef(null)
 
@@ -90,6 +91,18 @@ export default function BakongModal({ booking, onClose, onSuccess }) {
     }, [step])
 
     useEffect(() => () => clearTimeout(doneTimer.current), [])
+
+    // Mock mode: stand in for the customer's bank app.
+    async function simulatePayment() {
+        try {
+            setSimulating(true)
+            applyPayment(await paymentsApi.simulateBakong(payment.paymentId))
+        } catch (err) {
+            setError(err)
+        } finally {
+            setSimulating(false)
+        }
+    }
 
     // Close on Escape
     useEffect(() => {
@@ -163,6 +176,22 @@ export default function BakongModal({ booking, onClose, onSuccess }) {
                                 <Loader2 size={12} className={checking ? 'animate-spin' : ''} /> Waiting for payment
                             </span>
                         </div>
+
+                        {payment.mock && (
+                            <div className="bg-yellow-950/50 border border-yellow-700 rounded-xl p-3 mb-3">
+                                <p className="text-yellow-300 text-xs font-semibold mb-2">
+                                    Test mode: this QR is fake and cannot be paid from a bank app.
+                                </p>
+                                <button
+                                    onClick={simulatePayment}
+                                    disabled={simulating}
+                                    className="w-full bg-yellow-500 hover:bg-yellow-400 disabled:opacity-60 text-black font-semibold py-2 rounded-lg text-sm flex items-center justify-center gap-2"
+                                >
+                                    {simulating && <Loader2 size={14} className="animate-spin" />}
+                                    Simulate payment
+                                </button>
+                            </div>
+                        )}
 
                         <div className="bg-gray-800 rounded-xl p-3 mb-3 space-y-2">
                             <p className="text-xs font-semibold text-gray-300 mb-2">How to pay:</p>
