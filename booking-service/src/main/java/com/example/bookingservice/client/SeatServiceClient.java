@@ -38,28 +38,28 @@ public class SeatServiceClient {
     }
 
     /**
-     * Marks the seat BOOKED. seat-service answers 409 when the seat is
-     * already taken; that is translated here so the caller sees a domain
+     * Holds the seat for this showtime only. seat-service answers 409 when it is
+     * already taken for that show (or blocked); that is translated here so the caller sees a domain
      * exception rather than an HTTP one.
      *
      * Returns the reserved seat so the booking can be priced from it.
      */
-    public ReservedSeatDTO reserveSeat(Integer seatId) {
+    public ReservedSeatDTO reserveSeat(Integer seatId, Integer showtimeId) {
 
         return circuitBreaker.run(
-                () -> doReserveSeat(seatId),
+                () -> doReserveSeat(seatId, showtimeId),
                 throwable -> {
                     throw asRuntimeException(throwable);
                 }
         );
     }
 
-    private ReservedSeatDTO doReserveSeat(Integer seatId) {
+    private ReservedSeatDTO doReserveSeat(Integer seatId, Integer showtimeId) {
 
         try {
 
             return restClient.put()
-                    .uri("/api/seats/{id}/reserve", seatId)
+                    .uri("/api/seats/{id}/reserve?showtimeId={showtimeId}", seatId, showtimeId)
                     .retrieve()
                     .body(ReservedSeatDTO.class);
 
@@ -67,7 +67,7 @@ public class SeatServiceClient {
 
             if (ex.getStatusCode() == HttpStatus.CONFLICT) {
                 throw new SeatUnavailableException(
-                        "Seat " + seatId + " is already booked"
+                        "Seat " + seatId + " is already booked for this showtime"
                 );
             }
 
@@ -82,7 +82,7 @@ public class SeatServiceClient {
     }
 
     /**
-     * Compensating action — returns the seat to AVAILABLE. seat-service
+     * Compensating action — frees the seat for this showtime. seat-service
      * makes this idempotent, so a retry is safe.
      *
      * When the breaker is open this throws, and BookingServiceImpl's
@@ -90,12 +90,12 @@ public class SeatServiceClient {
      * cancellation must not be undone because seat-service is down, and the
      * stuck seat is logged for reconciliation.
      */
-    public void releaseSeat(Integer seatId) {
+    public void releaseSeat(Integer seatId, Integer showtimeId) {
 
         circuitBreaker.run(
                 () -> {
                     restClient.put()
-                            .uri("/api/seats/{id}/release", seatId)
+                            .uri("/api/seats/{id}/release?showtimeId={showtimeId}", seatId, showtimeId)
                             .retrieve()
                             .toBodilessEntity();
                     return null;

@@ -41,6 +41,9 @@ sql "DELETE FROM payment_db.payments;"
 sql "DELETE FROM booking_db.bookings;"
 
 echo "Releasing every seat back to AVAILABLE…"
+# Reservations are per showtime (seat V4); the UPDATE clears BOOKED left on
+# seat rows by reservations made before V4, and BLOCKED as before.
+sql "DELETE FROM seat_db.seat_reservations;"
 sql "UPDATE seat_db.seats SET status = 'AVAILABLE' WHERE status <> 'AVAILABLE';"
 
 # ---------------------------------------------------------------------------

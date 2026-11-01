@@ -105,8 +105,8 @@ of the registry has to refresh.
 | auth-service | user-service | `POST /api/users` | Create the profile when someone registers | `auth-service/.../client/UserServiceClient.java` |
 | auth-service | user-service | `GET /api/users/email/{email}` | Find the profile id for old accounts at login | same file |
 | booking-service | user-service | `GET /api/users/{id}` | Check the user exists before booking | `booking-service/.../client/UserServiceClient.java` |
-| booking-service | seat-service | `PUT /api/seats/{id}/reserve` | Reserve the seat (AVAILABLE → BOOKED) | `booking-service/.../client/SeatServiceClient.java` |
-| booking-service | seat-service | `PUT /api/seats/{id}/release` | Give the seat back (BOOKED → AVAILABLE) | same file |
+| booking-service | seat-service | `PUT /api/seats/{id}/reserve?showtimeId=` | Hold the seat for that showtime only | `booking-service/.../client/SeatServiceClient.java` |
+| booking-service | seat-service | `PUT /api/seats/{id}/release?showtimeId=` | Give the seat back for that showtime | same file |
 | payment-service | booking-service | `PUT /api/bookings/{id}/confirm` | Payment succeeded → confirm the booking | `payment-service/.../client/BookingServiceClient.java` |
 | payment-service | booking-service | `PUT /api/bookings/{id}/cancel` | Payment failed / refunded → cancel the booking | same file |
 | admin-service | user-service | `GET /api/users` | List all users on the admin screen | `admin-service/.../service/AdminServiceImpl.java` |

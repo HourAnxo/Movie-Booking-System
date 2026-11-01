@@ -27,6 +27,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 /**
+ * Editing a seat must never undo a status change made elsewhere. Since seat
+ * V4 the only BOOKED seats are pre-V4 reservations (markBooked below); the
+ * same rule protects a BLOCKED set by another admin mid-edit.
+ *
  * Editing a seat must never undo a reservation. A full-entity save writes
  * every column back, so an edit that read the seat as AVAILABLE and saved
  * after a booking reserved it would free the seat for a second booking.
@@ -79,9 +83,23 @@ class SeatUpdateKeepsStatusTest {
         return seatRepository.findById(seatId).orElseThrow();
     }
 
+    /**
+     * Puts BOOKED on the seat row itself, as a reservation made before
+     * seat V4 did. New reservations are rows in seat_reservations and never
+     * touch seats.status, but those legacy rows still exist and an edit must
+     * not free them. Commits in its own transaction, like a reserve did.
+     */
+    private void markBooked() {
+        transactionTemplate.executeWithoutResult(status ->
+                seatRepository.compareAndSetStatus(
+                        seatId, SeatStatus.AVAILABLE, SeatStatus.BOOKED
+                )
+        );
+    }
+
 
     @Test
-    @DisplayName("a reserve that lands mid-edit is not overwritten by the edit")
+    @DisplayName("a status change that lands mid-edit is not overwritten by the edit")
     void reserveDuringEditSurvives() throws Exception {
 
         ExecutorService otherThread = Executors.newSingleThreadExecutor();
@@ -94,10 +112,10 @@ class SeatUpdateKeepsStatusTest {
                 // The edit reads the seat while it is still AVAILABLE...
                 Seat seat = seatRepository.findById(seatId).orElseThrow();
 
-                // ...a booking reserves it on another connection and
+                // ...another connection marks it BOOKED and
                 // commits in the meantime...
                 try {
-                    otherThread.submit(() -> seatService.reserveSeat(seatId))
+                    otherThread.submit(this::markBooked)
                             .get(30, TimeUnit.SECONDS);
                 } catch (Exception e) {
                     throw new IllegalStateException(e);
@@ -122,7 +140,7 @@ class SeatUpdateKeepsStatusTest {
     @DisplayName("changing the price of a booked seat keeps it booked")
     void priceUpdateKeepsBooked() {
 
-        seatService.reserveSeat(seatId);
+        markBooked();
 
         seatService.updateSeatPrice(seatId, new BigDecimal("12.50"));
 
@@ -138,7 +156,7 @@ class SeatUpdateKeepsStatusTest {
     @DisplayName("an edit cannot free a booked seat")
     void editCannotReleaseBookedSeat() {
 
-        seatService.reserveSeat(seatId);
+        markBooked();
 
         assertThrows(SeatNotAvailableException.class, () ->
                 seatService.updateSeat(seatId, new SeatRequestDTO(
@@ -186,7 +204,7 @@ class SeatUpdateKeepsStatusTest {
     @DisplayName("an edit with no status leaves a booked seat booked")
     void editWithoutStatusKeepsBooked() {
 
-        seatService.reserveSeat(seatId);
+        markBooked();
 
         seatService.updateSeat(seatId, new SeatRequestDTO(
                 1, "A1", "VIP", null, null

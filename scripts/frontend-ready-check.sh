@@ -49,9 +49,15 @@ check "GET /api/auth/profile returns it too" "$UID_JSON" "$(sed -n 's/.*"userId"
 
 echo
 echo "  the flow that was impossible before: book using that id"
-SEAT=$(curl -s "$GW/api/seats" | sed -n 's/.*"seatId":\([0-9]*\)[^}]*"status":"AVAILABLE".*/\1/p' | head -1)
+# Seats are booked per showtime, so ask for the seats still free for show 1
+# on its own screen (a seat's stored status no longer changes when booked).
+SCREEN=$(curl -s "$GW/api/showtimes/1" | sed -n 's/.*"screenId":\([0-9]*\).*/\1/p' | head -1)
+SEAT=""
+if [ -n "$SCREEN" ]; then
+  SEAT=$(curl -s "$GW/api/seats/screen/$SCREEN/available?showtimeId=1" | sed -n 's/^\[{"seatId":\([0-9]*\).*/\1/p')
+fi
 if [ -z "$SEAT" ]; then
-  echo "        (no AVAILABLE seat in the catalogue — skipping the booking call)"
+  echo "        (no showtime 1, or no seat left free for it — skipping the booking call)"
 else
   code=$(curl -s -o /tmp/b -w '%{http_code}' -X POST "$GW/api/bookings" \
     -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \

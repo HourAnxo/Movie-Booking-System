@@ -32,10 +32,15 @@ export const showtimes = {
 
 export const seats = {
     list: () => get('/api/seats'),
-    byScreen: (screenId) => get(`/api/seats/screen/${screenId}`),
+    // With a showtimeId, each seat's status is its status for that show
+    // (booked for 2 PM can be free at 8 PM). Without one you get the stored
+    // layout status: AVAILABLE or BLOCKED (BOOKED only on pre-V4 seats).
+    byScreen: (screenId, showtimeId) =>
+        get(`/api/seats/screen/${screenId}${showtimeId ? `?showtimeId=${showtimeId}` : ''}`),
     create: (body) => post('/api/seats', body),
-    // ADMIN. Only AVAILABLE <-> BLOCKED is allowed: BOOKED is set by a booking
-    // (400 if sent), and a BOOKED seat can't change status (409).
+    // ADMIN. Only AVAILABLE <-> BLOCKED is allowed: bookings are made per
+    // showtime (BOOKED sent here is a 400), and a pre-V4 BOOKED seat can't
+    // change status (409).
     update: (id, body) => put(`/api/seats/${id}`, body),
     // ADMIN. Changes the price only; status is never touched.
     setPrice: (id, price) => put(`/api/seats/${id}/price`, { price }),

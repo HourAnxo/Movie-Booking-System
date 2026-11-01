@@ -8,19 +8,24 @@ import com.example.seatservice.entity.SeatStatus;
 import com.example.seatservice.exception.ResourceNotFoundException;
 import com.example.seatservice.exception.SeatNotAvailableException;
 import com.example.seatservice.repository.SeatRepository;
+import com.example.seatservice.repository.SeatReservationRepository;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 @Service
 public class SeatServiceImpl implements SeatService {
 
     private final SeatRepository seatRepository;
+    private final SeatReservationRepository reservationRepository;
 
     // Default prices per seat type
     private static final Map<String, BigDecimal> DEFAULT_PRICES = Map.of(
@@ -29,8 +34,12 @@ public class SeatServiceImpl implements SeatService {
             "COUPLE", new BigDecimal("15.00")
     );
 
-    public SeatServiceImpl(SeatRepository seatRepository) {
+    public SeatServiceImpl(
+            SeatRepository seatRepository,
+            SeatReservationRepository reservationRepository
+    ) {
         this.seatRepository = seatRepository;
+        this.reservationRepository = reservationRepository;
     }
 
     // RESOLVE DEFAULT PRICE
@@ -88,24 +97,50 @@ public class SeatServiceImpl implements SeatService {
 
     // GET BY SCREEN
     @Override
-    public List<SeatResponseDTO> getSeatsByScreenId(Integer screenId) {
+    public List<SeatResponseDTO> getSeatsByScreenId(
+            Integer screenId,
+            Integer showtimeId
+    ) {
 
-        return seatRepository.findByScreenId(screenId)
-                .stream()
-                .map(this::mapToResponse)
+        List<Seat> seats = seatRepository.findByScreenId(screenId);
+
+        if (showtimeId == null) {
+            return seats.stream().map(this::mapToResponse).toList();
+        }
+
+        // Availability is worked out on every read: a seat is BOOKED for
+        // this show only if a reservation row exists for it. A new showtime
+        // has no rows, so all its seats come back AVAILABLE.
+        Set<Integer> reserved = new HashSet<>(
+                reservationRepository.findSeatIdsByShowtimeId(showtimeId)
+        );
+
+        return seats.stream()
+                .map(seat -> mapToResponse(
+                        seat,
+                        statusForShowtime(seat, reserved.contains(seat.getSeatId()))
+                ))
                 .toList();
     }
 
     // GET AVAILABLE BY SCREEN
     @Override
     public List<SeatResponseDTO> getAvailableSeatsByScreenId(
-            Integer screenId
+            Integer screenId,
+            Integer showtimeId
     ) {
 
-        return seatRepository
-                .findByScreenIdAndStatus(screenId, SeatStatus.AVAILABLE)
+        if (showtimeId == null) {
+            return seatRepository
+                    .findByScreenIdAndStatus(screenId, SeatStatus.AVAILABLE)
+                    .stream()
+                    .map(this::mapToResponse)
+                    .toList();
+        }
+
+        return getSeatsByScreenId(screenId, showtimeId)
                 .stream()
-                .map(this::mapToResponse)
+                .filter(seat -> seat.status() == SeatStatus.AVAILABLE)
                 .toList();
     }
 
@@ -192,41 +227,73 @@ public class SeatServiceImpl implements SeatService {
     }
 
     // RESERVE
+    /**
+     * Holds the seat for one showtime. The same seat stays free for every
+     * other showtime on the screen.
+     *
+     * Not @Transactional: the insert runs in its own transaction so that a
+     * duplicate key (another caller won the race) can be turned into a
+     * clean 409 here instead of poisoning an outer transaction.
+     */
     @Override
-    @Transactional
-    public SeatResponseDTO reserveSeat(Integer id) {
+    public SeatResponseDTO reserveSeat(Integer id, Integer showtimeId) {
 
-        findSeatById(id);
+        requireShowtimeId(showtimeId);
 
-        int updated = seatRepository.compareAndSetStatus(
-                id,
-                SeatStatus.AVAILABLE,
-                SeatStatus.BOOKED
-        );
+        Seat seat = findSeatById(id);
 
-        if (updated == 0) {
+        int inserted;
+        try {
+            inserted = reservationRepository.reserve(id, showtimeId);
+        } catch (DataIntegrityViolationException alreadyTaken) {
+            throw new SeatNotAvailableException(
+                    "Seat " + id + " is already booked for showtime "
+                            + showtimeId
+            );
+        }
+
+        // No row inserted: the seat is BLOCKED (or a pre-V4 BOOKED seat).
+        if (inserted == 0) {
             throw new SeatNotAvailableException(
                     "Seat " + id + " is not available"
             );
         }
 
-        return mapToResponse(findSeatById(id));
+        return mapToResponse(seat, SeatStatus.BOOKED);
     }
 
     // RELEASE
+    /**
+     * Frees the seat for one showtime. Idempotent: releasing a seat that is
+     * not held for that show changes nothing.
+     *
+     * When no reservation row was removed, a seat still marked BOOKED is a
+     * reservation made before V4 (status on the seat itself) and is freed
+     * the old way. That is safe because nothing writes BOOKED any more and a
+     * BOOKED seat cannot be reserved, so the only booking on that seat that
+     * can release it is the one that holds it.
+     */
     @Override
     @Transactional
-    public SeatResponseDTO releaseSeat(Integer id) {
+    public SeatResponseDTO releaseSeat(Integer id, Integer showtimeId) {
+
+        requireShowtimeId(showtimeId);
 
         findSeatById(id);
 
-        seatRepository.compareAndSetStatus(
-                id,
-                SeatStatus.BOOKED,
-                SeatStatus.AVAILABLE
-        );
+        int removed = reservationRepository.release(id, showtimeId);
 
-        return mapToResponse(findSeatById(id));
+        if (removed == 0) {
+            seatRepository.compareAndSetStatus(
+                    id,
+                    SeatStatus.BOOKED,
+                    SeatStatus.AVAILABLE
+            );
+        }
+
+        Seat seat = findSeatById(id);
+
+        return mapToResponse(seat, statusForShowtime(seat, false));
     }
 
     // DELETE
@@ -245,15 +312,41 @@ public class SeatServiceImpl implements SeatService {
                 );
     }
 
+    private void requireShowtimeId(Integer showtimeId) {
+
+        if (showtimeId == null || showtimeId <= 0) {
+            throw new IllegalArgumentException(
+                    "showtimeId must be a positive id"
+            );
+        }
+    }
+
+    // A seat's status for one show. BLOCKED applies to every show; a legacy
+    // BOOKED seat (pre-V4) is still held; otherwise it depends on whether
+    // that show has a reservation for it.
+    private SeatStatus statusForShowtime(Seat seat, boolean reserved) {
+
+        if (seat.getStatus() != SeatStatus.AVAILABLE) {
+            return seat.getStatus();
+        }
+
+        return reserved ? SeatStatus.BOOKED : SeatStatus.AVAILABLE;
+    }
+
     // MAP ENTITY TO RESPONSE DTO
     private SeatResponseDTO mapToResponse(Seat seat) {
+
+        return mapToResponse(seat, seat.getStatus());
+    }
+
+    private SeatResponseDTO mapToResponse(Seat seat, SeatStatus status) {
 
         return new SeatResponseDTO(
                 seat.getSeatId(),
                 seat.getScreenId(),
                 seat.getSeatNumber(),
                 seat.getSeatType(),
-                seat.getStatus(),
+                status,
                 seat.getPrice(),
                 seat.getCreatedAt()
         );

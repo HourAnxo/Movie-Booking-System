@@ -50,23 +50,25 @@ public class SeatController {
         );
     }
 
-    // GET BY SCREEN
+    // GET BY SCREEN — ?showtimeId=N gives each seat's status for that show
     @GetMapping("/screen/{screenId}")
     public ResponseEntity<List<SeatResponseDTO>> getSeatsByScreenId(
-            @PathVariable Integer screenId
+            @PathVariable Integer screenId,
+            @RequestParam(required = false) Integer showtimeId
     ) {
         return ResponseEntity.ok(
-                seatService.getSeatsByScreenId(screenId)
+                seatService.getSeatsByScreenId(screenId, showtimeId)
         );
     }
 
-    // GET AVAILABLE BY SCREEN
+    // GET AVAILABLE BY SCREEN — ?showtimeId=N for one show
     @GetMapping("/screen/{screenId}/available")
     public ResponseEntity<List<SeatResponseDTO>> getAvailableSeatsByScreenId(
-            @PathVariable Integer screenId
+            @PathVariable Integer screenId,
+            @RequestParam(required = false) Integer showtimeId
     ) {
         return ResponseEntity.ok(
-                seatService.getAvailableSeatsByScreenId(screenId)
+                seatService.getAvailableSeatsByScreenId(screenId, showtimeId)
         );
     }
 
@@ -92,23 +94,25 @@ public class SeatController {
         );
     }
 
-    // RESERVE
+    // RESERVE for one showtime (internal: booking-service)
     @PutMapping("/{id}/reserve")
     public ResponseEntity<SeatResponseDTO> reserveSeat(
-            @PathVariable Integer id
+            @PathVariable Integer id,
+            @RequestParam Integer showtimeId
     ) {
         return ResponseEntity.ok(
-                seatService.reserveSeat(id)
+                seatService.reserveSeat(id, showtimeId)
         );
     }
 
-    // RELEASE
+    // RELEASE for one showtime (internal: booking-service)
     @PutMapping("/{id}/release")
     public ResponseEntity<SeatResponseDTO> releaseSeat(
-            @PathVariable Integer id
+            @PathVariable Integer id,
+            @RequestParam Integer showtimeId
     ) {
         return ResponseEntity.ok(
-                seatService.releaseSeat(id)
+                seatService.releaseSeat(id, showtimeId)
         );
     }
 
