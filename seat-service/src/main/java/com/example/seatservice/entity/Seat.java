@@ -14,6 +14,9 @@ import java.time.LocalDateTime;
                 columnNames = {"screen_id", "seat_number"}
         )
 )
+// UPDATE only the columns that changed, so an edit that leaves status alone
+// cannot write back a stale status over a concurrent reserve.
+@org.hibernate.annotations.DynamicUpdate
 @Getter
 @Setter
 @NoArgsConstructor

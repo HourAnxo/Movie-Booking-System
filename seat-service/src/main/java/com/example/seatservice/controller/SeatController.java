@@ -1,5 +1,6 @@
 package com.example.seatservice.controller;
 
+import com.example.seatservice.dto.SeatPriceRequestDTO;
 import com.example.seatservice.dto.SeatRequestDTO;
 import com.example.seatservice.dto.SeatResponseDTO;
 import com.example.seatservice.service.SeatService;
@@ -17,9 +18,7 @@ public class SeatController {
 
     private final SeatService seatService;
 
-    public SeatController(
-            SeatService seatService
-    ) {
+    public SeatController(SeatService seatService) {
         this.seatService = seatService;
     }
 
@@ -28,7 +27,6 @@ public class SeatController {
     public ResponseEntity<SeatResponseDTO> createSeat(
             @Valid @RequestBody SeatRequestDTO request
     ) {
-
         return ResponseEntity
                 .status(HttpStatus.CREATED)
                 .body(seatService.createSeat(request));
@@ -36,9 +34,7 @@ public class SeatController {
 
     // GET ALL
     @GetMapping
-    public ResponseEntity<List<SeatResponseDTO>>
-    getAllSeats() {
-
+    public ResponseEntity<List<SeatResponseDTO>> getAllSeats() {
         return ResponseEntity.ok(
                 seatService.getAllSeats()
         );
@@ -46,11 +42,9 @@ public class SeatController {
 
     // GET BY ID
     @GetMapping("/{id}")
-    public ResponseEntity<SeatResponseDTO>
-    getSeatById(
+    public ResponseEntity<SeatResponseDTO> getSeatById(
             @PathVariable Integer id
     ) {
-
         return ResponseEntity.ok(
                 seatService.getSeatById(id)
         );
@@ -58,60 +52,61 @@ public class SeatController {
 
     // GET BY SCREEN
     @GetMapping("/screen/{screenId}")
-    public ResponseEntity<List<SeatResponseDTO>>
-    getSeatsByScreenId(
+    public ResponseEntity<List<SeatResponseDTO>> getSeatsByScreenId(
             @PathVariable Integer screenId
     ) {
-
         return ResponseEntity.ok(
                 seatService.getSeatsByScreenId(screenId)
         );
     }
 
-    // GET AVAILABLE BY SCREEN — the seat map a user picks from
+    // GET AVAILABLE BY SCREEN
     @GetMapping("/screen/{screenId}/available")
-    public ResponseEntity<List<SeatResponseDTO>>
-    getAvailableSeatsByScreenId(
+    public ResponseEntity<List<SeatResponseDTO>> getAvailableSeatsByScreenId(
             @PathVariable Integer screenId
     ) {
-
         return ResponseEntity.ok(
                 seatService.getAvailableSeatsByScreenId(screenId)
         );
     }
 
-    // UPDATE
+    // UPDATE SEAT
     @PutMapping("/{id}")
-    public ResponseEntity<SeatResponseDTO>
-    updateSeat(
+    public ResponseEntity<SeatResponseDTO> updateSeat(
             @PathVariable Integer id,
             @Valid @RequestBody SeatRequestDTO request
     ) {
-
         return ResponseEntity.ok(
                 seatService.updateSeat(id, request)
         );
     }
 
-    // RESERVE — called by booking-service when a booking is created
+    // UPDATE SEAT PRICE
+    @PutMapping("/{id}/price")
+    public ResponseEntity<SeatResponseDTO> updateSeatPrice(
+            @PathVariable Integer id,
+            @Valid @RequestBody SeatPriceRequestDTO request
+    ) {
+        return ResponseEntity.ok(
+                seatService.updateSeatPrice(id, request.price())
+        );
+    }
+
+    // RESERVE
     @PutMapping("/{id}/reserve")
-    public ResponseEntity<SeatResponseDTO>
-    reserveSeat(
+    public ResponseEntity<SeatResponseDTO> reserveSeat(
             @PathVariable Integer id
     ) {
-
         return ResponseEntity.ok(
                 seatService.reserveSeat(id)
         );
     }
 
-    // RELEASE — compensating call from booking-service
+    // RELEASE
     @PutMapping("/{id}/release")
-    public ResponseEntity<SeatResponseDTO>
-    releaseSeat(
+    public ResponseEntity<SeatResponseDTO> releaseSeat(
             @PathVariable Integer id
     ) {
-
         return ResponseEntity.ok(
                 seatService.releaseSeat(id)
         );
@@ -122,7 +117,6 @@ public class SeatController {
     public ResponseEntity<Void> deleteSeat(
             @PathVariable Integer id
     ) {
-
         seatService.deleteSeat(id);
 
         return ResponseEntity.noContent().build();
