@@ -12,6 +12,60 @@ import { Film, Building2, Users, Plus, Monitor, Clock, Armchair, Activity } from
 import toast from 'react-hot-toast'
 import HealthTab from '../components/HealthTab'
 
+// Read the same way as the Book page: date and time in the browser's zone.
+const showStart = (s) => new Date(`${s.showDate}T${s.startTime}`)
+
+// Upcoming shows first (soonest on top), then past ones (newest first).
+// Book lists only upcoming shows, so a movie whose shows are all past
+// says "No upcoming showtimes" there.
+function ShowtimeList({ showtimes, movies, screens, theaters }) {
+    const now = new Date()
+    const all = showtimes ?? []
+    const upcoming = all.filter((s) => showStart(s) > now).sort((a, b) => showStart(a) - showStart(b))
+    const past = all.filter((s) => showStart(s) <= now).sort((a, b) => showStart(b) - showStart(a))
+
+    const row = (s, isPast) => {
+        const movie = movies.find((m) => m.movieId === s.movieId)
+        const screen = screens.find((x) => x.screenId === s.screenId)
+        const theater = theaters.find((t) => t.theaterId === s.theaterId)
+        return (
+            <li key={s.showtimeId} className={`flex items-center justify-between gap-3 py-2 text-sm ${isPast ? 'opacity-50' : ''}`}>
+                <div className="min-w-0">
+                    <p className="text-white font-medium truncate">{movie?.title ?? `Movie #${s.movieId}`}</p>
+                    <p className="text-xs text-gray-500 truncate">{theater?.name ?? `Theater #${s.theaterId}`} — {screen?.name ?? `Screen #${s.screenId}`}</p>
+                </div>
+                <p className="text-xs text-gray-300 shrink-0 text-right">
+                    {showStart(s).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}
+                    <br />{s.startTime.slice(0, 5)}–{s.endTime.slice(0, 5)}
+                </p>
+            </li>
+        )
+    }
+
+    return (
+        <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
+            <h2 className="text-base font-semibold text-white mb-1 flex items-center gap-2">
+                <Clock size={16} className="text-yellow-400" /> Existing Showtimes
+            </h2>
+            <p className="text-xs text-gray-500 mb-4">Only upcoming showtimes can be booked.</p>
+            {showtimes === null ? <Spinner /> : (
+                <>
+                    <p className="text-xs text-gray-400 font-medium uppercase tracking-wide">Upcoming ({upcoming.length})</p>
+                    {upcoming.length === 0
+                        ? <p className="text-sm text-gray-500 py-2">None yet. Add one with a future date.</p>
+                        : <ul className="divide-y divide-gray-800 max-h-80 overflow-y-auto">{upcoming.map((s) => row(s, false))}</ul>}
+                    {past.length > 0 && (
+                        <details className="mt-4">
+                            <summary className="text-xs text-gray-500 font-medium uppercase tracking-wide cursor-pointer">Past ({past.length})</summary>
+                            <ul className="divide-y divide-gray-800 max-h-60 overflow-y-auto mt-1">{past.map((s) => row(s, true))}</ul>
+                        </details>
+                    )}
+                </>
+            )}
+        </div>
+    )
+}
+
 const inp = 'w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition'
 
 function Field({ label, hint, children }) {
@@ -31,6 +85,7 @@ export default function Admin() {
     const [theaters, setTheaters] = useState([])
     const [screens, setScreens] = useState([])
     const [movies, setMovies] = useState([])
+    const [showtimes, setShowtimes] = useState(null)
     const [error, setError] = useState(null)
     const [activeTab, setActiveTab] = useState('movies')
 
@@ -53,16 +108,18 @@ export default function Admin() {
 
     const load = useCallback(async () => {
         try {
-            const [u, th, sc, mv] = await Promise.all([
+            const [u, th, sc, mv, st] = await Promise.all([
                 adminApi.users(),
                 theatersApi.list(),
                 screensApi.list(),
                 moviesApi.list(),
+                showtimesApi.list(),
             ])
             setUsers(u)
             setTheaters(th)
             setScreens(sc)
             setMovies(mv)
+            setShowtimes(st)
         } catch (err) {
             setError(err)
         }
@@ -120,8 +177,12 @@ export default function Admin() {
     async function addShowtime(e) {
         e.preventDefault(); setBusy(true); setError(null)
         try {
-            const created = await showtimesApi.create({
+            // The API requires theaterId; a screen belongs to exactly one
+            // theater, so take it from the chosen screen.
+            const chosenScreen = screens.find((s) => s.screenId === Number(showtime.screenId))
+            await showtimesApi.create({
                 movieId: Number(showtime.movieId),
+                theaterId: chosenScreen?.theaterId,
                 screenId: Number(showtime.screenId),
                 showDate: showtime.showDate,
                 startTime: showtime.startTime,
@@ -259,7 +320,7 @@ export default function Admin() {
                     { label: 'Movies',    value: movies?.length,   icon: <Film size={18} />,     color: 'text-red-400 bg-red-950/50 border-red-900' },
                     { label: 'Theaters',  value: theaters?.length, icon: <Building2 size={18} />,color: 'text-green-400 bg-green-950/50 border-green-900' },
                     { label: 'Screens',   value: screens?.length,  icon: <Monitor size={18} />,  color: 'text-purple-400 bg-purple-950/50 border-purple-900' },
-                    { label: 'Showtimes', value: '—',              icon: <Clock size={18} />,    color: 'text-yellow-400 bg-yellow-950/50 border-yellow-900' },
+                    { label: 'Showtimes', value: showtimes?.length, icon: <Clock size={18} />,    color: 'text-yellow-400 bg-yellow-950/50 border-yellow-900' },
                 ].map((s) => (
                     <div key={s.label} className="bg-gray-900 rounded-xl border border-gray-800 p-3 flex items-center gap-2.5">
                         <div className={`w-9 h-9 rounded-lg flex items-center justify-center border shrink-0 ${s.color}`}>{s.icon}</div>
@@ -411,7 +472,8 @@ export default function Admin() {
 
             {/* ── SHOWTIMES ── */}
             {activeTab === 'showtimes' && (
-                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 max-w-lg">
+                <div className="grid lg:grid-cols-2 gap-6 items-start">
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
                     <h2 className="text-base font-semibold text-white mb-1 flex items-center gap-2">
                         <Clock size={16} className="text-yellow-400" /> Add New Showtime
                     </h2>
@@ -441,6 +503,8 @@ export default function Admin() {
                             <Plus size={15} />{busy ? 'Adding...' : 'Add Showtime'}
                         </button>
                     </form>
+                </div>
+                <ShowtimeList showtimes={showtimes} movies={movies} screens={screens} theaters={theaters} />
                 </div>
             )}
 
