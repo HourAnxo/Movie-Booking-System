@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
     screens as screensApi,
@@ -11,7 +11,8 @@ import {
 import { useAuth } from '../auth/useAuth'
 import { ErrorBox, Spinner } from '../components/Common'
 import { searchMovie, posterUrl } from '../api/useTMDB'
-import { CheckCircle2, Film, Building2, Monitor, Clock, ChevronRight, X } from 'lucide-react'
+import SeatMap from '../components/SeatMap'
+import { CheckCircle2, Film, Building2, Monitor, Clock, ChevronRight } from 'lucide-react'
 import toast from 'react-hot-toast'
 
 // Display only. booking-service prices each booking from the seat row and
@@ -20,6 +21,14 @@ const seatPrice = (seat) => Number(seat.price ?? 0)
 
 // Handle both seatId and id field names from backend
 const getSeatId = (seat) => seat.seatId ?? seat.id
+
+// showDate "2026-11-01" + startTime "20:00:00", in the browser's zone
+const showStart = (s) => new Date(`${s.showDate}T${s.startTime}`)
+
+const formatShow = (s) =>
+    showStart(s).toLocaleString(undefined, {
+        weekday: 'short', day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit',
+    })
 
 function Steps({ current }) {
     const steps = ['Movie', 'Theater', 'Screen & Time', 'Seats', 'Confirm']
@@ -145,7 +154,7 @@ export default function Book() {
     const [theaters, setTheaters] = useState(null)
     const [screens, setScreens] = useState(null)
     const [showtimes, setShowtimes] = useState(null)
-    const [seats, setSeats] = useState(null)
+    const [loadedSeats, setLoadedSeats] = useState(null) // { showtimeId, list }
 
     const [selectedMovie, setSelectedMovie] = useState(null)
     const [selectedTheater, setSelectedTheater] = useState(null)
@@ -183,12 +192,25 @@ export default function Book() {
         })
     }, [selectedMovie])
 
-    useEffect(() => {
-        if (!selectedScreen) { setSeats(null); return }
-        setSeats(null)
-        setSelectedSeats([])
-        seatsApi.byScreen(selectedScreen.screenId).then(setSeats).catch(setError)
-    }, [selectedScreen])
+    // Seats are booked per showtime, so the grid is loaded for the chosen
+    // show: a seat taken at 2 PM is still free at 8 PM. The result is tagged
+    // with its showtime so a grid from the previous pick is never shown.
+    // (Every handler that changes the screen or show also clears the
+    // selected seats.)
+    const screenId = selectedScreen?.screenId
+    const showtimeId = selectedShowtime?.showtimeId
+
+    const loadSeats = useCallback(() => {
+        if (!screenId || !showtimeId) return
+        seatsApi
+            .byScreen(screenId, showtimeId)
+            .then((list) => setLoadedSeats({ showtimeId, list }))
+            .catch(setError)
+    }, [screenId, showtimeId])
+
+    useEffect(() => { loadSeats() }, [loadSeats])
+
+    const seats = loadedSeats && loadedSeats.showtimeId === showtimeId ? loadedSeats.list : null
 
     // Toggle seat selection
     function toggleSeat(seat) {
@@ -228,9 +250,9 @@ export default function Book() {
 
             if (failed.length > 0) {
                 toast.error(`Seat(s) ${failed.join(', ')} were taken. Others booked successfully.`)
-                // Reload seats to show updated availability
-                seatsApi.byScreen(selectedScreen.screenId).then(setSeats)
+                // Reload this show's seats to show updated availability
                 setSelectedSeats([])
+                loadSeats()
             }
 
             if (created.length > 0) {
@@ -250,11 +272,16 @@ export default function Book() {
         ? (screens ?? []).filter((s) => s.theaterId === selectedTheater.theaterId)
         : (screens ?? [])
 
-    const filteredShowtimes = selectedScreen
-        ? (showtimes ?? []).filter((s) => s.screenId === selectedScreen.screenId)
-        : (showtimes ?? [])
+    // Only this movie's upcoming shows on this screen. A show that has
+    // started can't be booked, which is all "resetting" a past show means
+    // now that seats are held per showtime.
+    const now = new Date()
+    const filteredShowtimes = (showtimes ?? [])
+        .filter((s) => !selectedScreen || s.screenId === selectedScreen.screenId)
+        .filter((s) => !selectedMovie || s.movieId === selectedMovie.movieId)
+        .filter((s) => showStart(s) > now)
+        .sort((a, b) => showStart(a) - showStart(b))
 
-    const available = seats?.filter((s) => s.status === 'AVAILABLE').length ?? 0
     const totalAmount = selectedSeats.reduce((sum, s) => sum + seatPrice(s), 0)
     const totalPrice = totalAmount.toFixed(2)
     const totalKHR = Math.round(totalAmount * 4100).toLocaleString()
@@ -337,7 +364,7 @@ export default function Book() {
                             icon={<Monitor size={16} />}
                             title="3. Choose Screen & Showtime"
                             done={!!(selectedScreen && selectedShowtime)}
-                            summary={selectedScreen && selectedShowtime ? `${selectedScreen.name} · ${selectedShowtime.showDate} ${selectedShowtime.startTime}` : null}
+                            summary={selectedScreen && selectedShowtime ? `${selectedScreen.name} · ${formatShow(selectedShowtime)}` : null}
                             onEdit={() => { setSelectedScreen(null); setSelectedShowtime(null); setSelectedSeats([]) }}
                         >
                             <div className="space-y-4">
@@ -366,7 +393,7 @@ export default function Book() {
                                     <div>
                                         <p className="text-xs text-gray-400 font-medium mb-2 uppercase tracking-wide">Showtime</p>
                                         {filteredShowtimes.length === 0 ? (
-                                            <p className="text-gray-500 text-sm">No showtimes for this screen.</p>
+                                            <p className="text-gray-500 text-sm">No upcoming showtimes for this movie on this screen.</p>
                                         ) : (
                                             <div className="flex flex-wrap gap-2">
                                                 {filteredShowtimes.map((s) => (
@@ -377,7 +404,7 @@ export default function Book() {
                               ${selectedShowtime?.showtimeId === s.showtimeId ? 'border-red-600 bg-red-950/30 text-white' : 'border-gray-700 bg-gray-800/50 text-gray-300 hover:border-gray-600'}`}
                                                     >
                                                         <Clock size={13} />
-                                                        {s.showDate} · {s.startTime}
+                                                        {formatShow(s)}
                                                     </button>
                                                 ))}
                                             </div>
@@ -393,80 +420,17 @@ export default function Book() {
                         <Section
                             icon={<Monitor size={16} />}
                             title="4. Choose Seats"
-                            done={selectedSeats.length > 0}
-                            summary={selectedSeats.length > 0 ? `${selectedSeats.length} seat(s): ${selectedSeats.map(s => s.seatNumber).join(', ')}` : null}
-                            onEdit={() => setSelectedSeats([])}
+                            done={false}
                         >
                             {!seats ? (
                                 <Spinner label="Loading seats..." />
                             ) : (
-                                <>
-                                    {/* Hint */}
-                                    <p className="text-xs text-gray-500 mb-4">
-                                        Click seats to select/deselect. You can select multiple seats.
-                                    </p>
-
-                                    {/* Screen label */}
-                                    <div className="mb-5">
-                                        <div className="w-2/3 mx-auto h-1 bg-gradient-to-r from-transparent via-gray-500 to-transparent rounded-full mb-1" />
-                                        <p className="text-center text-xs text-gray-600 tracking-widest uppercase">Screen</p>
-                                    </div>
-
-                                    {/* Legend */}
-                                    <div className="flex items-center justify-center gap-5 mb-5 text-xs text-gray-400 flex-wrap">
-                                        <span className="flex items-center gap-1.5"><div className="w-4 h-4 rounded border-2 border-green-500 bg-green-950/50" /> Available ({available})</span>
-                                        <span className="flex items-center gap-1.5"><div className="w-4 h-4 rounded bg-red-600 border-2 border-red-500" /> Selected ({selectedSeats.length})</span>
-                                        <span className="flex items-center gap-1.5"><div className="w-4 h-4 rounded bg-gray-700 border-2 border-gray-600" /> Taken</span>
-                                    </div>
-
-                                    {seats.length === 0 ? (
-                                        <p className="text-center text-gray-500 text-sm py-6">No seats for this screen yet.</p>
-                                    ) : (
-                                        <div className="grid grid-cols-8 sm:grid-cols-10 gap-1.5 max-w-lg mx-auto">
-                                            {seats.map((seat) => {
-                                                const free = seat.status === 'AVAILABLE'
-                                                const isSelected = selectedSeats.some((s) => getSeatId(s) === getSeatId(seat))
-                                                return (
-                                                    <button
-                                                        key={getSeatId(seat)}
-                                                        disabled={!free}
-                                                        onClick={() => toggleSeat(seat)}
-                                                        title={`${seat.seatNumber} — ${seat.seatType} — ${seat.status}`}
-                                                        className={`aspect-square rounded text-xs font-bold border-2 transition-all duration-150
-                              ${isSelected
-                                                            ? 'bg-red-600 border-red-500 text-white scale-110 shadow-lg shadow-red-900/50'
-                                                            : free
-                                                                ? 'bg-green-950/50 border-green-700 text-green-400 hover:bg-green-600 hover:text-white hover:scale-105'
-                                                                : 'bg-gray-800 border-gray-700 text-gray-600 cursor-not-allowed line-through'
-                                                        }`}
-                                                    >
-                                                        {seat.seatNumber}
-                                                    </button>
-                                                )
-                                            })}
-                                        </div>
-                                    )}
-
-                                    {/* Selected seats chips */}
-                                    {selectedSeats.length > 0 && (
-                                        <div className="mt-5 flex flex-wrap gap-2">
-                                            {selectedSeats.map((s) => (
-                                                <div key={getSeatId(s)} className="flex items-center gap-1.5 bg-red-950/50 border border-red-800 text-red-300 text-xs font-medium px-2.5 py-1 rounded-full">
-                                                    {s.seatNumber}
-                                                    <button onClick={() => toggleSeat(s)} className="hover:text-white transition-colors">
-                                                        <X size={11} />
-                                                    </button>
-                                                </div>
-                                            ))}
-                                            <button
-                                                onClick={() => setSelectedSeats([])}
-                                                className="text-xs text-gray-500 hover:text-gray-300 px-2.5 py-1 rounded-full border border-gray-700 hover:border-gray-600 transition-colors"
-                                            >
-                                                Clear all
-                                            </button>
-                                        </div>
-                                    )}
-                                </>
+                                <SeatMap
+                                    seats={seats}
+                                    selectedSeats={selectedSeats}
+                                    onToggle={toggleSeat}
+                                    onClear={() => setSelectedSeats([])}
+                                />
                             )}
                         </Section>
                     )}
@@ -485,7 +449,7 @@ export default function Book() {
                                 <SummaryRow label="Movie" value={selectedMovie?.title} />
                                 <SummaryRow label="Theater" value={selectedTheater?.name} />
                                 <SummaryRow label="Screen" value={selectedScreen?.name} />
-                                <SummaryRow label="Showtime" value={selectedShowtime ? `${selectedShowtime.showDate} · ${selectedShowtime.startTime}` : null} />
+                                <SummaryRow label="Showtime" value={selectedShowtime ? formatShow(selectedShowtime) : null} />
                                 <SummaryRow
                                     label="Seats"
                                     value={selectedSeats.length > 0 ? selectedSeats.map(s => s.seatNumber).join(', ') : null}
@@ -527,6 +491,29 @@ export default function Book() {
                     </div>
                 </div>
             </div>
+
+            {/* Phones: the summary card is far below the grid, so keep the
+                total and the button in reach. */}
+            {selectedSeats.length > 0 && (
+                <div className="lg:hidden fixed inset-x-0 bottom-0 z-40 border-t border-gray-800 bg-gray-950/95 backdrop-blur px-4 py-3">
+                    <div className="flex items-center gap-3 max-w-3xl mx-auto">
+                        <div className="min-w-0 flex-1">
+                            <p className="text-xs text-gray-400 truncate">
+                                {selectedSeats.length} seat(s) · {selectedSeats.map((s) => s.seatNumber).join(', ')}
+                            </p>
+                            <p className="text-white font-black">${totalPrice}</p>
+                        </div>
+                        <button
+                            onClick={confirmBooking}
+                            disabled={step < 5 || busy}
+                            className="shrink-0 bg-red-600 hover:bg-red-700 disabled:opacity-40 text-white font-bold px-5 py-2.5 rounded-xl text-sm"
+                        >
+                            {busy ? 'Booking...' : 'Book'}
+                        </button>
+                    </div>
+                </div>
+            )}
+            {selectedSeats.length > 0 && <div className="lg:hidden h-20" />}
         </div>
     )
 }

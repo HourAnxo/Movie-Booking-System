@@ -61,7 +61,10 @@ public class BookingServiceImpl implements BookingService {
         userServiceClient.requireUserExists(request.userId());
 
         ReservedSeatDTO seat =
-                seatServiceClient.reserveSeat(request.seatId());
+                seatServiceClient.reserveSeat(
+                        request.seatId(),
+                        request.showtimeId()
+                );
 
         try {
 
@@ -100,7 +103,7 @@ public class BookingServiceImpl implements BookingService {
                     ex
             );
 
-            safeReleaseSeat(request.seatId());
+            safeReleaseSeat(request.seatId(), request.showtimeId());
 
             throw ex;
         }
@@ -150,6 +153,19 @@ public class BookingServiceImpl implements BookingService {
 
         Booking booking = findBookingById(id);
 
+        // The seat is held for this booking's showtime, so moving the
+        // booking to another show would leave the old show's seat held and
+        // the new show's seat unreserved. Same rule as seatId below.
+        if (!Objects.equals(
+                booking.getShowtimeId(),
+                request.showtimeId()
+        )) {
+            throw new IllegalArgumentException(
+                    "showtimeId cannot be changed; cancel the booking "
+                            + "and book the other showtime"
+            );
+        }
+
         // Only pay for the remote check when the owner actually changes.
         if (!Objects.equals(
                 booking.getUserId(),
@@ -159,7 +175,6 @@ public class BookingServiceImpl implements BookingService {
         }
 
         booking.setUserId(request.userId());
-        booking.setShowtimeId(request.showtimeId());
 
         // totalAmount is not updatable either: it is the reserved seat's
         // price, and payment-service charges exactly that.
@@ -210,7 +225,7 @@ public class BookingServiceImpl implements BookingService {
                 bookingRepository.save(booking);
 
         // Compensating action: hand the seat back so it can be resold.
-        safeReleaseSeat(booking.getSeatId());
+        safeReleaseSeat(booking.getSeatId(), booking.getShowtimeId());
 
         return mapToResponse(cancelledBooking);
     }
@@ -225,7 +240,7 @@ public class BookingServiceImpl implements BookingService {
         bookingRepository.delete(booking);
 
         if (booking.getBookingStatus() != BookingStatus.CANCELLED) {
-            safeReleaseSeat(booking.getSeatId());
+            safeReleaseSeat(booking.getSeatId(), booking.getShowtimeId());
         }
     }
 
@@ -246,15 +261,16 @@ public class BookingServiceImpl implements BookingService {
      * seat-service is momentarily down. The seat is left stuck BOOKED and
      * the failure is logged for reconciliation.
      */
-    private void safeReleaseSeat(Integer seatId) {
+    private void safeReleaseSeat(Integer seatId, Integer showtimeId) {
 
         try {
-            seatServiceClient.releaseSeat(seatId);
+            seatServiceClient.releaseSeat(seatId, showtimeId);
         } catch (RuntimeException ex) {
             log.error(
-                    "Failed to release seat {} — it may stay BOOKED until "
-                            + "reconciled",
+                    "Failed to release seat {} for showtime {} — it may "
+                            + "stay BOOKED for that show until reconciled",
                     seatId,
+                    showtimeId,
                     ex
             );
         }

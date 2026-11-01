@@ -14,7 +14,7 @@ One git repo (branch `master`). This file holds the rules; the reasons live in `
 
 Each of these fails silently or reintroduces double-booking. Later sections add only what this list leaves out.
 
-- **Seat reserve is a conditional UPDATE** (`SeatRepository.compareAndSetStatus`), never load-check-save. `SeatReservationConcurrencyTest` guards it.
+- **Seats are booked per showtime.** A reservation is a row in `seat_reservations` (seat `V4`), inserted by `SeatReservationRepository.reserve` in one `INSERT … SELECT` that also requires the seat to be AVAILABLE. The `UNIQUE (showtime_id, seat_id)` key is the double-booking guard, so never replace it with check-then-save. No row means the seat is free for that show; nothing is generated or reset per showtime. A reservation never touches `seats.status`, which holds only AVAILABLE/BLOCKED (BOOKED survives only on rows reserved before V4). `reserveSeat` isn't `@Transactional`, so a duplicate key becomes a clean 409 rather than a rollback-only transaction. `SeatReservationConcurrencyTest` guards it.
 - **Seat edits never write `status` back.** `Seat` is `@DynamicUpdate` and `updateSeat` is `@Transactional`, so a field edit leaves the status column out of its UPDATE; `updateSeatPrice` uses the targeted `SeatRepository.updatePrice`. An edit may only move AVAILABLE ↔ BLOCKED, through `compareAndSetStatus` (BOOKED requested → 400, BOOKED seat → 409). `@DynamicUpdate` doesn't protect a detached copy saved later, since merge copies every field; load and save in one transaction. `SeatUpdateKeepsStatusTest` guards it.
 - **`BookingServiceImpl.createBooking` is not `@Transactional`.** The reservation is a remote call; the compensating seat release in a `catch` replaces rollback.
 - **Payment state changes are conditional UPDATEs too** (`PaymentRepository.markPaidIfPending` / `compareAndSetStatus`); only the caller that changes the row confirms the booking.
@@ -63,17 +63,21 @@ The plugin URL is hard-coded to **`localhost:3306`** (the local MySQL). For the 
 
 ### Tests
 
-**Every test but one is a `@SpringBootTest` `contextLoads` smoke test.** It boots the full context, so a data service needs its database on the local MySQL (3306); discovery-server, api-gateway and admin-service have none. Eureka doesn't have to be up: the client only logs `Connection refused` and the test still passes. `mvn test` is really a check that all twelve services can start.
+**Every test but two is a `@SpringBootTest` `contextLoads` smoke test.** It boots the full context, so a data service needs its database on the local MySQL (3306); discovery-server, api-gateway and admin-service have none. Eureka doesn't have to be up: the client only logs `Connection refused` and the test still passes. `mvn test` is really a check that all twelve services can start.
 
 **Booting the context runs Flyway**, so a test run applies any pending migration to the local database for real.
 
-The exception is **`SeatReservationConcurrencyTest`** in seat-service. It needs **Docker** (Testcontainers MySQL, Eureka client off), not the local MySQL. It releases sixteen threads against one AVAILABLE seat, and exactly one must win:
+The two exceptions are in seat-service and need **Docker** (Testcontainers `mysql:8.4`, Eureka client off), not the local MySQL:
+
+- **`SeatReservationConcurrencyTest`** releases sixteen threads against one seat in one showtime, and exactly one must win. It also checks that showtimes are independent, that a new showtime starts empty, that release is per show and idempotent, and that a pre-V4 BOOKED seat can still be released.
+- **`SeatUpdateKeepsStatusTest`** checks that seat edits and price changes never overwrite `status`, and that only AVAILABLE ↔ BLOCKED moves are accepted.
 
 ```powershell
 cd seat-service; .\mvnw.cmd test -Dtest=SeatReservationConcurrencyTest
+cd seat-service; .\mvnw.cmd test -Dtest=SeatUpdateKeepsStatusTest
 ```
 
-If you touch the reservation path, deliberately swap in a read-then-write once and confirm this test goes red.
+If you touch the reservation path, confirm `SeatReservationConcurrencyTest` can go red: drop the UNIQUE constraint from V4 and swap in a check-then-insert (16 winners), then restore both. A check-then-insert alone stays green, because the key still catches it.
 
 Testcontainers 2.x renamed its artifacts (`testcontainers-mysql`, not `mysql`), and `MySQLContainer` is now in `org.testcontainers.mysql` and no longer generic. The Boot BOM manages the versions, so declare none.
 
@@ -152,7 +156,8 @@ npm run build | lint | preview
 - **`components/HealthTab.jsx` and the health helper in `api/endpoints.js`** hard-code `localhost:8083` / `:8761` and ignore `VITE_API_URL`.
 - **`payments.createBakong` shares one in-flight promise per booking** (`api/endpoints.js`), so StrictMode's double effect sends one POST. The server enforces the same rule; don't drop either side.
 - **CORS allows only `localhost` ports 5173, 5174 and 3000** (override with `CORS_ALLOWED_ORIGINS`; recreate the container, no rebuild). Any other dev port is blocked until listed. The default list is written three times: `cors.allowed-origins` in the gateway's `application.yml`, the `@Value` fallback in `CorsConfig`, and `docker-compose.yml`. Change all three.
-- **Known gaps:** no ownership checks, admin can't be granted from the UI, and no seat hold timer. A selected seat is booked immediately, so an abandoned `PENDING` booking holds it until cancelled.
+- **The seat grid (`components/SeatMap.jsx`) is loaded per showtime** via `seats.byScreen(screenId, showtimeId)`. Rows are parsed from seat numbers (`A12` → row A, column 12), so keep that naming. `Book.jsx` lists only the chosen movie's showtimes that haven't started yet, in the browser's time zone. Admin's seat manager calls `byScreen` without a showtime and sees layout status (AVAILABLE/BLOCKED).
+- **Known gaps:** no ownership checks, admin can't be granted from the UI, and no seat hold timer. A selected seat is booked immediately, so an abandoned `PENDING` booking holds it for that show until cancelled.
 
 ## Architecture
 
@@ -161,8 +166,9 @@ npm run build | lint | preview
 ```
 POST /api/bookings
   booking -> user-service  GET /api/users/{userId}     no such user -> 400, nothing reserved
-  booking -> seat-service  PUT /api/seats/{id}/reserve  AVAILABLE -> BOOKED, booking PENDING (201)
-                                                        not AVAILABLE -> 409, no booking row
+  booking -> seat-service  PUT /api/seats/{id}/reserve?showtimeId=N
+                             inserts (showtimeId, seatId) reservation, booking PENDING (201)
+                             taken for that show, or seat BLOCKED -> 409, no booking row
 
 POST /api/payments/bakong {bookingId}
   payment -> booking  GET /api/bookings/{id}   must be PENDING and owned by X-Auth-UserId (else 403)
@@ -175,7 +181,7 @@ GET /api/payments/{id}/bakong/check  (browser, every 3s)  +  BakongPaymentSweepe
 
 PUT /api/payments/{id}/failed|cancel  (from PENDING)
 PUT /api/payments/{id}/refund|paid    (ADMIN; refund from PAID)
-  -> booking PUT /cancel|confirm; cancel releases the seat (BOOKED -> AVAILABLE)
+  -> booking PUT /cancel|confirm; cancel releases the seat for that showtime (deletes the reservation)
 ```
 
 The reasoning behind each rule below is in `docs/project-overview.md` §4.
@@ -183,8 +189,9 @@ The reasoning behind each rule below is in `docs/project-overview.md` §4.
 **Booking rules:**
 
 - Validate the user, then reserve the seat, then write the booking row. Don't reorder.
-- **Release is idempotent** (`BOOKED -> AVAILABLE`, otherwise a no-op). `safeReleaseSeat` logs and swallows seat-service errors, so a seat may stay `BOOKED` for reconciliation.
-- `cancelBooking` returns early on `CANCELLED`. `confirmBooking` refuses `CANCELLED` (400). `deleteBooking` releases the seat unless already `CANCELLED`. `updateBooking` never changes `seatId`.
+- **Reserve and release both carry the booking's `showtimeId`** (a required query param on seat-service).
+- **Release is idempotent.** It deletes the `(showtime, seat)` reservation, and a missing row is a no-op. When no row was removed and the seat itself is `BOOKED` (pre-V4), it CASes that back to AVAILABLE. `safeReleaseSeat` logs and swallows seat-service errors, so a seat may stay booked for that show until reconciled.
+- `cancelBooking` returns early on `CANCELLED`. `confirmBooking` refuses `CANCELLED` (400). `deleteBooking` releases the seat unless already `CANCELLED`. `updateBooking` never changes `seatId`, and refuses a `showtimeId` change (400), since the reservation is keyed by it.
 
 **Payment rules** (Bakong is the source of truth for "paid"):
 
@@ -260,7 +267,7 @@ Flyway owns the schema. Every data service sets `ddl-auto=validate`, so an entit
 There are no cross-service foreign keys. A reference is an integer, and validating it takes a remote call.
 
 - **booking-service validates `seatId` (the reserve) and `userId` (`GET /api/users/{id}`).** A user-service outage blocks bookings with 502 rather than failing open. `updateBooking` re-checks only when the owner changes.
-- **Taken on trust:** `Booking.showtimeId`, `Seat.screenId`, and `Showtime.movieId`/`theaterId`/`screenId`. The legacy `POST /api/payments` still accepts a client amount, but nothing it creates can reach PAID without an ADMIN.
+- **Taken on trust:** `Booking.showtimeId` (seat-service doesn't check that the showtime is on the seat's screen, or hasn't started), `Seat.screenId`, and `Showtime.movieId`/`theaterId`/`screenId`. The legacy `POST /api/payments` still accepts a client amount, but nothing it creates can reach PAID without an ADMIN.
 - **There are two user tables.** `auth_db.users` holds credentials; `user_db.users` holds profiles, and `Booking.userId` refers to it. `auth_db.users.profile_id` (auth `V3`, nullable) links them. The link travels as a `userId` token claim, which the gateway forwards as **`X-Auth-UserId`**, and it's returned by register, login and profile. `login` backfills a missing `profile_id` via `GET /api/users/email/{email}` and never throws. auth_db must never read user_db's tables directly.
 - **`AuthServiceImpl.register` is a `@Transactional` dual write**, so a failed user-service call rolls back the credential row.
 

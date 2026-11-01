@@ -18,11 +18,18 @@ public interface SeatService {
     // GET BY ID
     SeatResponseDTO getSeatById(Integer id);
 
-    // GET BY SCREEN
-    List<SeatResponseDTO> getSeatsByScreenId(Integer screenId);
+    // GET BY SCREEN. With a showtimeId each seat's status is its status for
+    // that show; without one it is the stored seat status (the layout view).
+    List<SeatResponseDTO> getSeatsByScreenId(
+            Integer screenId,
+            Integer showtimeId
+    );
 
-    // GET AVAILABLE BY SCREEN
-    List<SeatResponseDTO> getAvailableSeatsByScreenId(Integer screenId);
+    // GET AVAILABLE BY SCREEN (for one showtime when showtimeId is given)
+    List<SeatResponseDTO> getAvailableSeatsByScreenId(
+            Integer screenId,
+            Integer showtimeId
+    );
 
     // UPDATE SEAT
     SeatResponseDTO updateSeat(
@@ -36,11 +43,11 @@ public interface SeatService {
             BigDecimal price
     );
 
-    // RESERVE: AVAILABLE -> BOOKED
-    SeatResponseDTO reserveSeat(Integer id);
+    // RESERVE the seat for one showtime (409 if taken or blocked)
+    SeatResponseDTO reserveSeat(Integer id, Integer showtimeId);
 
-    // RELEASE: BOOKED -> AVAILABLE
-    SeatResponseDTO releaseSeat(Integer id);
+    // RELEASE the seat for one showtime (idempotent)
+    SeatResponseDTO releaseSeat(Integer id, Integer showtimeId);
 
     // DELETE
     void deleteSeat(Integer id);

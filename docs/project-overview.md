@@ -118,7 +118,7 @@ All paths below are what a client calls through the gateway on `:8083`.
 | theaters `/api/theaters` | `POST /`, `GET /`, `GET /{id}`, `PUT /{id}`, `DELETE /{id}` |
 | screens `/api/screens` | `POST /`, `GET /`, `GET /{id}`, `PUT /{id}`, `DELETE /{id}` |
 | showtimes `/api/showtimes` | `POST /`, `GET /`, `GET /{id}`, `PUT /{id}`, `DELETE /{id}` |
-| seats `/api/seats` | `POST /`, `GET /`, `GET /{id}`, `GET /screen/{screenId}`, `GET /screen/{screenId}/available`, `PUT /{id}`, `PUT /{id}/reserve`, `PUT /{id}/release`, `DELETE /{id}` |
+| seats `/api/seats` | `POST /`, `GET /`, `GET /{id}`, `GET /screen/{screenId}[?showtimeId=]`, `GET /screen/{screenId}/available[?showtimeId=]`, `PUT /{id}`, `PUT /{id}/price`, `PUT /{id}/reserve?showtimeId=`, `PUT /{id}/release?showtimeId=`, `DELETE /{id}` |
 
 `/reserve` and `/release` are meant for booking-service, which calls
 seat-service directly through Eureka rather than through the gateway.
@@ -185,7 +185,7 @@ so none of them is a real foreign key.
 | --- | --- |
 | `Role` | `USER`, `ADMIN` |
 | `MovieStatus` | `NOW_SHOWING`, `COMING_SOON`, `ARCHIVED` |
-| `SeatStatus` | `AVAILABLE`, `BOOKED`, `BLOCKED` |
+| `SeatStatus` | `AVAILABLE`, `BOOKED`, `BLOCKED` (stored: AVAILABLE/BLOCKED; BOOKED is per showtime, or a pre-V4 row) |
 | `BookingStatus` | `PENDING`, `CONFIRMED`, `CANCELLED` |
 | `PaymentStatus` | `PENDING`, `PAID`, `FAILED`, `CANCELLED`, `REFUNDED` |
 
@@ -225,12 +225,12 @@ sequenceDiagram
     alt no such user
         B-->>C: 400 (nothing reserved)
     end
-    B->>S: PUT /api/seats/{seatId}/reserve
-    alt seat not AVAILABLE
+    B->>S: PUT /api/seats/{seatId}/reserve?showtimeId=N
+    alt seat taken for that show, or BLOCKED
         S-->>B: 409
         B-->>C: 409 (no booking written)
     end
-    S-->>B: AVAILABLE → BOOKED (returns seat price)
+    S-->>B: (showtime, seat) row inserted (returns seat price)
     B->>B: insert booking PENDING, totalAmount = seat price
     B-->>C: 201 booking
 
@@ -250,8 +250,8 @@ sequenceDiagram
     else nothing paid by expires_at + 30s
         P->>P: PENDING → EXPIRED
         P->>B: PUT /api/bookings/{id}/cancel
-        B->>S: PUT /api/seats/{seatId}/release
-        S-->>B: BOOKED → AVAILABLE
+        B->>S: PUT /api/seats/{seatId}/release?showtimeId=N
+        S-->>B: (showtime, seat) row deleted
     end
 ```
 
@@ -262,24 +262,34 @@ sequenceDiagram
 2. **Reserve the seat before writing the booking.** If the seat is taken,
    there is no booking row to clean up. If the insert fails *after* the
    reservation, booking-service releases the seat in a `catch` block.
-3. **The reservation is an atomic conditional UPDATE**, not "read, check,
-   save":
+3. **The reservation is one row per (showtime, seat)**, inserted atomically,
+   not "read, check, save":
 
    ```sql
-   UPDATE seats SET status = 'BOOKED'
+   INSERT INTO seat_reservations (showtime_id, seat_id, created_at)
+   SELECT ?, seat_id, NOW() FROM seats
    WHERE seat_id = ? AND status = 'AVAILABLE'
    ```
 
-   If zero rows change, someone else got the seat first → 409. The database
-   guarantees only one caller can win. `SeatReservationConcurrencyTest` fires
-   16 threads at one seat and asserts exactly one succeeds; a read-then-write
-   version lets 12 of the 16 "win".
-4. **Release is idempotent.** Releasing an already-free seat does nothing, and
-   cancelling an already-cancelled booking returns early — so retries from
-   payment-service are harmless.
+   `UNIQUE (showtime_id, seat_id)` means only one caller can insert the row;
+   the others get a duplicate key → 409. Zero rows inserted means the seat is
+   `BLOCKED` → 409. `SeatReservationConcurrencyTest` fires 16 threads at one
+   seat in one show and asserts exactly one succeeds; without the unique key
+   all 16 "win".
+
+   Because the key includes the showtime, booking A5 for the 2 PM show
+   leaves A5 free for the 8 PM show. A showtime nobody has booked has no
+   rows, so every seat is available: nothing is generated when a showtime is
+   created and nothing is reset after it ends. (Before seat `V4` a
+   reservation set `seats.status = 'BOOKED'`, which took the seat away from
+   every show on the screen; `BOOKED` now only survives on those old rows.)
+4. **Release is idempotent.** It deletes the (showtime, seat) row, and
+   deleting a row that is not there does nothing. Cancelling an
+   already-cancelled booking returns early, so retries from payment-service
+   are harmless.
 5. **A cancellation never fails because seat-service is down.** The release
-   error is logged instead; the seat may stay `BOOKED` until someone
-   reconciles it. That trade-off is deliberate.
+   error is logged instead; the seat may stay booked for that show until
+   someone reconciles it. That trade-off is deliberate.
 
 `createBooking` is intentionally **not** `@Transactional`: a remote call cannot
 join a local transaction, so the compensating release does the job of a
