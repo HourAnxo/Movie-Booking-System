@@ -34,6 +34,11 @@ export const seats = {
     list: () => get('/api/seats'),
     byScreen: (screenId) => get(`/api/seats/screen/${screenId}`),
     create: (body) => post('/api/seats', body),
+    // ADMIN. Only AVAILABLE <-> BLOCKED is allowed: BOOKED is set by a booking
+    // (400 if sent), and a BOOKED seat can't change status (409).
+    update: (id, body) => put(`/api/seats/${id}`, body),
+    // ADMIN. Changes the price only; status is never touched.
+    setPrice: (id, price) => put(`/api/seats/${id}/price`, { price }),
 }
 
 export const bookings = {

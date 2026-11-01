@@ -39,8 +39,14 @@ export default function Admin() {
     const [theater, setTheater] = useState({ name: '', location: '', address: '' })
     const [screen, setScreen] = useState({ name: '', screenType: 'STANDARD', capacity: '', theaterId: '' })
     const [showtime, setShowtime] = useState({ movieId: '', screenId: '', showDate: '', startTime: '', endTime: '' })
-    const [seat, setSeat] = useState({ screenId: '', seatNumber: '', seatType: 'STANDARD', rows: '', cols: '' })
+    const [seat, setSeat] = useState({ screenId: '', seatNumber: '', seatType: 'STANDARD', price: '', rows: '', cols: '' })
     const [bulkMode, setBulkMode] = useState(false)
+
+    // Manage existing seats
+    const [manageScreenId, setManageScreenId] = useState('')
+    const [screenSeats, setScreenSeats] = useState(null)
+    const [priceDraft, setPriceDraft] = useState({})
+    const [seatBusyId, setSeatBusyId] = useState(null)
 
     // Busy states
     const [busy, setBusy] = useState(false)
@@ -128,8 +134,70 @@ export default function Admin() {
         finally { setBusy(false) }
     }
 
+    const loadScreenSeats = useCallback(async (screenId) => {
+        if (!screenId) { setScreenSeats(null); return }
+        setScreenSeats(null)
+        try {
+            const list = await seatsApi.byScreen(screenId)
+            list.sort((a, b) => a.seatNumber.localeCompare(b.seatNumber, undefined, { numeric: true }))
+            setScreenSeats(list)
+            setPriceDraft({})
+        } catch (err) { setError(err); setScreenSeats([]) }
+    }, [])
+
+    function pickManageScreen(screenId) {
+        setManageScreenId(screenId)
+        loadScreenSeats(screenId)
+    }
+
+    function replaceSeat(updated) {
+        setScreenSeats((list) => list.map((s) => (s.seatId === updated.seatId ? updated : s)))
+    }
+
+    async function saveSeatPrice(s) {
+        const price = Number(priceDraft[s.seatId])
+        if (!(price > 0)) { toast.error('Price must be greater than zero'); return }
+        setSeatBusyId(s.seatId); setError(null)
+        try {
+            replaceSeat(await seatsApi.setPrice(s.seatId, price))
+            setPriceDraft((drafts) => {
+                const next = { ...drafts }
+                delete next[s.seatId]
+                return next
+            })
+            toast.success(`Seat ${s.seatNumber} is now $${price.toFixed(2)}`)
+        } catch (err) { setError(err); toast.error('Failed to update price.') }
+        finally { setSeatBusyId(null) }
+    }
+
+    async function toggleSeatBlocked(s) {
+        const next = s.status === 'BLOCKED' ? 'AVAILABLE' : 'BLOCKED'
+        setSeatBusyId(s.seatId); setError(null)
+        try {
+            // price null = keep the current price
+            replaceSeat(await seatsApi.update(s.seatId, {
+                screenId: s.screenId,
+                seatNumber: s.seatNumber,
+                seatType: s.seatType,
+                status: next,
+                price: null,
+            }))
+            toast.success(`Seat ${s.seatNumber} ${next === 'BLOCKED' ? 'blocked' : 'unblocked'}`)
+        } catch (err) {
+            if (err.status === 409) {
+                // Someone booked it while we were looking: show the real state.
+                toast.error(`Seat ${s.seatNumber} was just booked. Cancel the booking to free it.`)
+                loadScreenSeats(manageScreenId)
+            } else {
+                setError(err); toast.error('Failed to update seat.')
+            }
+        } finally { setSeatBusyId(null) }
+    }
+
     async function addSeats(e) {
         e.preventDefault(); setBusy(true); setError(null)
+        // Blank price = the server's default for the seat type
+        const price = seat.price ? Number(seat.price) : null
         try {
             if (bulkMode) {
                 // Bulk: generate seats like A1, A2... B1, B2...
@@ -144,6 +212,7 @@ export default function Admin() {
                             seatNumber: `${row}${col}`,
                             seatType: seat.seatType,
                             status: 'AVAILABLE',
+                            price,
                         })
                         count++
                     }
@@ -155,11 +224,13 @@ export default function Admin() {
                     seatNumber: seat.seatNumber,
                     seatType: seat.seatType,
                     status: 'AVAILABLE',
+                    price,
                 })
                 toast.success(`Seat ${seat.seatNumber} added!`)
                 setSeat({ ...seat, seatNumber: '' })
             }
             load()
+            if (String(seat.screenId) === String(manageScreenId)) loadScreenSeats(manageScreenId)
         } catch (err) { setError(err); toast.error('Failed to add seat(s).') }
         finally { setBusy(false) }
     }
@@ -233,7 +304,7 @@ export default function Admin() {
                             <select value={movie.status} onChange={(e) => setMovie({ ...movie, status: e.target.value })} className={inp}>
                                 <option value="NOW_SHOWING">Now Showing</option>
                                 <option value="COMING_SOON">Coming Soon</option>
-                                <option value="ENDED">Ended</option>
+                                <option value="ARCHIVED">Archived</option>
                             </select>
                         </Field>
                         <button type="submit" disabled={busy} className="w-full flex items-center justify-center gap-2 bg-red-600 hover:bg-red-700 disabled:opacity-50 text-white font-bold py-2.5 rounded-lg text-sm transition-colors">
@@ -375,7 +446,8 @@ export default function Admin() {
 
             {/* ── SEATS ── */}
             {activeTab === 'seats' && (
-                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6 max-w-lg">
+                <div className="grid lg:grid-cols-2 gap-6 items-start">
+                <div className="bg-gray-900 rounded-xl border border-gray-800 p-6">
                     <h2 className="text-base font-semibold text-white mb-1 flex items-center gap-2">
                         <Armchair size={16} className="text-orange-400" /> Add Seats
                     </h2>
@@ -412,6 +484,10 @@ export default function Admin() {
                             </select>
                         </Field>
 
+                        <Field label="Price" hint="blank = default for the type">
+                            <input type="number" step="0.01" min="0.01" value={seat.price} onChange={(e) => setSeat({ ...seat, price: e.target.value })} placeholder="5.00" className={inp} />
+                        </Field>
+
                         {!bulkMode ? (
                             <Field label="Seat Number *" hint="e.g. A1, B5">
                                 <input value={seat.seatNumber} onChange={(e) => setSeat({ ...seat, seatNumber: e.target.value })} required placeholder="A1" className={inp} />
@@ -437,6 +513,65 @@ export default function Admin() {
                             <Plus size={15} />{busy ? 'Adding...' : bulkMode ? 'Generate Seats' : 'Add Seat'}
                         </button>
                     </form>
+                </div>
+
+                {/* Manage existing seats */}
+                <div className="bg-gray-900 rounded-xl border border-gray-800 overflow-hidden">
+                    <div className="px-4 py-3 border-b border-gray-800 space-y-3">
+                        <h3 className="text-sm font-semibold text-white">Manage Seats</h3>
+                        <select value={manageScreenId} onChange={(e) => pickManageScreen(e.target.value)} className={inp}>
+                            <option value="">Select a screen...</option>
+                            {screens.map((s) => {
+                                const theater = theaters.find((t) => t.theaterId === s.theaterId)
+                                return <option key={s.screenId} value={s.screenId}>{theater?.name ?? ''} — {s.name}</option>
+                            })}
+                        </select>
+                        <p className="text-xs text-gray-500">Booked seats keep their booking when you change the price. To free a booked seat, cancel its booking.</p>
+                    </div>
+                    {!manageScreenId ? null : !screenSeats ? <div className="p-6"><Spinner /></div> : screenSeats.length === 0 ? (
+                        <p className="text-gray-500 text-sm p-4">No seats on this screen yet.</p>
+                    ) : (
+                        <div className="divide-y divide-gray-800 max-h-[32rem] overflow-y-auto">
+                            {screenSeats.map((s) => {
+                                const draft = priceDraft[s.seatId]
+                                const rowBusy = seatBusyId === s.seatId
+                                const badge = {
+                                    AVAILABLE: 'text-green-400 bg-green-950/50 border-green-900',
+                                    BOOKED: 'text-red-400 bg-red-950/50 border-red-900',
+                                    BLOCKED: 'text-gray-400 bg-gray-800 border-gray-700',
+                                }[s.status]
+                                return (
+                                    <div key={s.seatId} className="px-4 py-2.5 flex items-center gap-3">
+                                        <div className="w-16 shrink-0">
+                                            <p className="text-sm font-medium text-white">{s.seatNumber}</p>
+                                            <p className="text-[10px] text-gray-500">{s.seatType}</p>
+                                        </div>
+                                        <span className={`text-[10px] font-semibold px-2 py-0.5 rounded border w-20 text-center ${badge}`}>{s.status}</span>
+                                        <div className="flex items-center gap-1.5 flex-1">
+                                            <span className="text-gray-500 text-sm">$</span>
+                                            <input type="number" step="0.01" min="0.01"
+                                                   value={draft ?? Number(s.price ?? 0).toFixed(2)}
+                                                   onChange={(e) => setPriceDraft({ ...priceDraft, [s.seatId]: e.target.value })}
+                                                   onKeyDown={(e) => { if (e.key === 'Enter' && draft !== undefined) saveSeatPrice(s) }}
+                                                   className="w-20 px-2 py-1 bg-gray-800 border border-gray-700 rounded text-sm text-white focus:outline-none focus:ring-2 focus:ring-red-500" />
+                                            {draft !== undefined && (
+                                                <button onClick={() => saveSeatPrice(s)} disabled={rowBusy}
+                                                        className="text-xs font-semibold px-2 py-1 rounded bg-orange-600 hover:bg-orange-700 disabled:opacity-50 text-white">
+                                                    Save
+                                                </button>
+                                            )}
+                                        </div>
+                                        <button onClick={() => toggleSeatBlocked(s)} disabled={rowBusy || s.status === 'BOOKED'}
+                                                title={s.status === 'BOOKED' ? 'Cancel the booking to free this seat' : undefined}
+                                                className="text-xs font-semibold px-2.5 py-1 rounded border border-gray-700 text-gray-300 hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed shrink-0">
+                                            {s.status === 'BLOCKED' ? 'Unblock' : 'Block'}
+                                        </button>
+                                    </div>
+                                )
+                            })}
+                        </div>
+                    )}
+                </div>
                 </div>
             )}
 

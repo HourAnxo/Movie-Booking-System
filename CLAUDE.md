@@ -15,6 +15,7 @@ One git repo (branch `master`). This file holds the rules; the reasons live in `
 Each of these fails silently or reintroduces double-booking. Later sections add only what this list leaves out.
 
 - **Seat reserve is a conditional UPDATE** (`SeatRepository.compareAndSetStatus`), never load-check-save. `SeatReservationConcurrencyTest` guards it.
+- **Seat edits never write `status` back.** `Seat` is `@DynamicUpdate` and `updateSeat` is `@Transactional`, so a field edit leaves the status column out of its UPDATE; `updateSeatPrice` uses the targeted `SeatRepository.updatePrice`. An edit may only move AVAILABLE ↔ BLOCKED, through `compareAndSetStatus` (BOOKED requested → 400, BOOKED seat → 409). `@DynamicUpdate` doesn't protect a detached copy saved later, since merge copies every field; load and save in one transaction. `SeatUpdateKeepsStatusTest` guards it.
 - **`BookingServiceImpl.createBooking` is not `@Transactional`.** The reservation is a remote call; the compensating seat release in a `catch` replaces rollback.
 - **Payment state changes are conditional UPDATEs too** (`PaymentRepository.markPaidIfPending` / `compareAndSetStatus`); only the caller that changes the row confirms the booking.
 - **Circuit-breaker fallbacks rethrow the original exception.** They never invent a result and never wrap it (`run()` without a fallback turns every error into a 500).

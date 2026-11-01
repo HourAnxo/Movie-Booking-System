@@ -41,4 +41,20 @@ public interface SeatRepository
             @Param("fromStatus") SeatStatus fromStatus,
             @Param("toStatus") SeatStatus toStatus
     );
+
+    /**
+     * Changes only the price column. A load-then-save would write every
+     * column back, including a stale status, and could undo a concurrent
+     * reserve (BOOKED -> AVAILABLE).
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query("""
+            UPDATE Seat s
+               SET s.price = :price
+             WHERE s.seatId = :seatId
+            """)
+    int updatePrice(
+            @Param("seatId") Integer seatId,
+            @Param("price") java.math.BigDecimal price
+    );
 }

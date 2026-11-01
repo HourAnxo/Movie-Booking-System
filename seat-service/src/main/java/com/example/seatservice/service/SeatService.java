@@ -1,52 +1,47 @@
+
 package com.example.seatservice.service;
 
 import com.example.seatservice.dto.SeatRequestDTO;
 import com.example.seatservice.dto.SeatResponseDTO;
 
+import java.math.BigDecimal;
 import java.util.List;
 
 public interface SeatService {
 
-    SeatResponseDTO createSeat(
-            SeatRequestDTO request
-    );
+    // CREATE
+    SeatResponseDTO createSeat(SeatRequestDTO request);
 
+    // GET ALL
     List<SeatResponseDTO> getAllSeats();
 
-    SeatResponseDTO getSeatById(
-            Integer id
-    );
+    // GET BY ID
+    SeatResponseDTO getSeatById(Integer id);
 
-    List<SeatResponseDTO> getSeatsByScreenId(
-            Integer screenId
-    );
+    // GET BY SCREEN
+    List<SeatResponseDTO> getSeatsByScreenId(Integer screenId);
 
-    List<SeatResponseDTO> getAvailableSeatsByScreenId(
-            Integer screenId
-    );
+    // GET AVAILABLE BY SCREEN
+    List<SeatResponseDTO> getAvailableSeatsByScreenId(Integer screenId);
 
+    // UPDATE SEAT
     SeatResponseDTO updateSeat(
             Integer id,
             SeatRequestDTO request
     );
 
-    /**
-     * AVAILABLE -> BOOKED. Called by booking-service when a booking is
-     * created. Throws if the seat is not AVAILABLE.
-     */
-    SeatResponseDTO reserveSeat(
-            Integer id
+    // UPDATE SEAT PRICE
+    SeatResponseDTO updateSeatPrice(
+            Integer id,
+            BigDecimal price
     );
 
-    /**
-     * BOOKED -> AVAILABLE. Called by booking-service when a booking is
-     * cancelled, and as the compensating action when payment fails.
-     */
-    SeatResponseDTO releaseSeat(
-            Integer id
-    );
+    // RESERVE: AVAILABLE -> BOOKED
+    SeatResponseDTO reserveSeat(Integer id);
 
-    void deleteSeat(
-            Integer id
-    );
+    // RELEASE: BOOKED -> AVAILABLE
+    SeatResponseDTO releaseSeat(Integer id);
+
+    // DELETE
+    void deleteSeat(Integer id);
 }
