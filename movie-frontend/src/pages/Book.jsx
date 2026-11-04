@@ -268,19 +268,27 @@ export default function Book() {
 
     if (!movies) return <Spinner />
 
-    const filteredScreens = selectedTheater
-        ? (screens ?? []).filter((s) => s.theaterId === selectedTheater.theaterId)
-        : (screens ?? [])
-
-    // Only this movie's upcoming shows on this screen. A show that has
-    // started can't be booked, which is all "resetting" a past show means
-    // now that seats are held per showtime.
+    // Only this movie's upcoming shows. A show that has started can't be
+    // booked, which is all "resetting" a past show means now that seats are
+    // held per showtime. Theaters and screens are narrowed to the ones that
+    // have such a show, so a customer never picks their way to a dead end.
     const now = new Date()
-    const filteredShowtimes = (showtimes ?? [])
-        .filter((s) => !selectedScreen || s.screenId === selectedScreen.screenId)
-        .filter((s) => !selectedMovie || s.movieId === selectedMovie.movieId)
+    const movieShowtimes = (showtimes ?? [])
+        .filter((s) => selectedMovie && s.movieId === selectedMovie.movieId)
         .filter((s) => showStart(s) > now)
         .sort((a, b) => showStart(a) - showStart(b))
+
+    const theaterIdsWithShows = new Set(movieShowtimes.map((s) => s.theaterId))
+    const screenIdsWithShows = new Set(movieShowtimes.map((s) => s.screenId))
+
+    const filteredTheaters = (theaters ?? []).filter((t) => theaterIdsWithShows.has(t.theaterId))
+
+    const filteredScreens = (screens ?? [])
+        .filter((s) => !selectedTheater || s.theaterId === selectedTheater.theaterId)
+        .filter((s) => screenIdsWithShows.has(s.screenId))
+
+    const filteredShowtimes = movieShowtimes
+        .filter((s) => !selectedScreen || s.screenId === selectedScreen.screenId)
 
     const totalAmount = selectedSeats.reduce((sum, s) => sum + seatPrice(s), 0)
     const totalPrice = totalAmount.toFixed(2)
@@ -332,11 +340,13 @@ export default function Book() {
                             summary={selectedTheater?.name}
                             onEdit={() => { setSelectedTheater(null); setSelectedScreen(null); setSelectedShowtime(null); setSelectedSeats([]) }}
                         >
-                            {(theaters ?? []).length === 0 ? (
-                                <p className="text-gray-500 text-sm">No theaters available.</p>
+                            {filteredTheaters.length === 0 ? (
+                                <p className="text-gray-500 text-sm">
+                                    No upcoming showtimes for this movie yet. Please check back later or choose another movie.
+                                </p>
                             ) : (
                                 <div className="grid gap-2">
-                                    {(theaters ?? []).map((t) => (
+                                    {filteredTheaters.map((t) => (
                                         <button
                                             key={t.theaterId}
                                             onClick={() => { setSelectedTheater(t); setSelectedScreen(null); setSelectedShowtime(null); setSelectedSeats([]) }}
@@ -371,7 +381,7 @@ export default function Book() {
                                 <div>
                                     <p className="text-xs text-gray-400 font-medium mb-2 uppercase tracking-wide">Screen</p>
                                     {filteredScreens.length === 0 ? (
-                                        <p className="text-gray-500 text-sm">No screens for this theater.</p>
+                                        <p className="text-gray-500 text-sm">No upcoming showtimes for this movie at this theater.</p>
                                     ) : (
                                         <div className="grid grid-cols-2 gap-2">
                                             {filteredScreens.map((s) => (

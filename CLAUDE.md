@@ -157,6 +157,7 @@ npm run build | lint | preview
 - **`payments.createBakong` shares one in-flight promise per booking** (`api/endpoints.js`), so StrictMode's double effect sends one POST. The server enforces the same rule; don't drop either side.
 - **CORS allows only `localhost` ports 5173, 5174 and 3000** (override with `CORS_ALLOWED_ORIGINS`; recreate the container, no rebuild). Any other dev port is blocked until listed. The default list is written three times: `cors.allowed-origins` in the gateway's `application.yml`, the `@Value` fallback in `CorsConfig`, and `docker-compose.yml`. Change all three.
 - **The seat grid (`components/SeatMap.jsx`) is loaded per showtime** via `seats.byScreen(screenId, showtimeId)`. Rows are parsed from seat numbers (`A12` → row A, column 12), so keep that naming. `Book.jsx` lists only the chosen movie's showtimes that haven't started yet, in the browser's time zone. Admin's seat manager calls `byScreen` without a showtime and sees layout status (AVAILABLE/BLOCKED).
+- **`ShowtimeRequestDTO` requires `theaterId`.** The admin showtime form (`pages/Admin.jsx`) has no theater picker and takes it from the chosen screen, since a screen belongs to one theater. A form that leaves it out gets a 400.
 - **Known gaps:** no ownership checks, admin can't be granted from the UI, and no seat hold timer. A selected seat is booked immediately, so an abandoned `PENDING` booking holds it for that show until cancelled.
 
 ## Architecture
