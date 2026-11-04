@@ -100,7 +100,11 @@ function LegendSwatch({ className, children }) {
  */
 export default function SeatMap({ seats, selectedSeats, onToggle, onClear }) {
     if (seats.length === 0) {
-        return <p className="text-center text-gray-500 text-sm py-6">No seats for this screen yet.</p>
+        return (
+            <p className="text-center text-gray-500 text-sm py-6">
+                Seats for this screen haven't been set up yet, so it can't be booked. Please choose another showtime.
+            </p>
+        )
     }
 
     const { rows, maxCol } = buildRows(seats)

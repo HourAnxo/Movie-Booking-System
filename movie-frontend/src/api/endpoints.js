@@ -28,6 +28,9 @@ export const screens = {
 export const showtimes = {
     list: () => get('/api/showtimes'),
     create: (body) => post('/api/showtimes', body),
+    // ADMIN. Nothing checks bookings server-side; the admin page refuses to
+    // delete a showtime that still has PENDING/CONFIRMED bookings.
+    remove: (id) => del(`/api/showtimes/${id}`),
 }
 
 export const seats = {

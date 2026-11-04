@@ -6,9 +6,10 @@ import {
     screens as screensApi,
     showtimes as showtimesApi,
     seats as seatsApi,
+    bookings as bookingsApi,
 } from '../api/endpoints'
 import { ErrorBox, Spinner } from '../components/Common'
-import { Film, Building2, Users, Plus, Monitor, Clock, Armchair, Activity } from 'lucide-react'
+import { Film, Building2, Users, Plus, Monitor, Clock, Armchair, Activity, Trash2, Wand2 } from 'lucide-react'
 import toast from 'react-hot-toast'
 import HealthTab from '../components/HealthTab'
 
@@ -18,7 +19,7 @@ const showStart = (s) => new Date(`${s.showDate}T${s.startTime}`)
 // Upcoming shows first (soonest on top), then past ones (newest first).
 // Book lists only upcoming shows, so a movie whose shows are all past
 // says "No upcoming showtimes" there.
-function ShowtimeList({ showtimes, movies, screens, theaters }) {
+function ShowtimeList({ showtimes, movies, screens, theaters, activeBookings, deletingId, onDelete }) {
     const now = new Date()
     const all = showtimes ?? []
     const upcoming = all.filter((s) => showStart(s) > now).sort((a, b) => showStart(a) - showStart(b))
@@ -28,16 +29,25 @@ function ShowtimeList({ showtimes, movies, screens, theaters }) {
         const movie = movies.find((m) => m.movieId === s.movieId)
         const screen = screens.find((x) => x.screenId === s.screenId)
         const theater = theaters.find((t) => t.theaterId === s.theaterId)
+        const booked = activeBookings[s.showtimeId] ?? 0
         return (
-            <li key={s.showtimeId} className={`flex items-center justify-between gap-3 py-2 text-sm ${isPast ? 'opacity-50' : ''}`}>
-                <div className="min-w-0">
+            <li key={s.showtimeId} className="flex items-center justify-between gap-3 py-2 text-sm">
+                <div className={`min-w-0 flex-1 ${isPast ? 'opacity-50' : ''}`}>
                     <p className="text-white font-medium truncate">{movie?.title ?? `Movie #${s.movieId}`}</p>
-                    <p className="text-xs text-gray-500 truncate">{theater?.name ?? `Theater #${s.theaterId}`} — {screen?.name ?? `Screen #${s.screenId}`}</p>
+                    <p className="text-xs text-gray-500 truncate">
+                        {theater?.name ?? `Theater #${s.theaterId}`} — {screen?.name ?? `Screen #${s.screenId}`}
+                        {booked > 0 && <span className="text-green-400"> · {booked} booked</span>}
+                    </p>
                 </div>
-                <p className="text-xs text-gray-300 shrink-0 text-right">
-                    {showStart(s).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' })}
+                <p className={`text-xs text-gray-300 shrink-0 text-right ${isPast ? 'opacity-50' : ''}`}>
+                    {showStart(s).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' })}
                     <br />{s.startTime.slice(0, 5)}–{s.endTime.slice(0, 5)}
                 </p>
+                <button onClick={() => onDelete(s, booked)} disabled={deletingId === s.showtimeId}
+                        title={booked > 0 ? `${booked} active booking(s): cancel them first` : 'Delete showtime'}
+                        className="p-1.5 rounded text-gray-500 hover:text-red-400 hover:bg-red-950/40 disabled:opacity-40 shrink-0">
+                    <Trash2 size={14} />
+                </button>
             </li>
         )
     }
@@ -66,6 +76,31 @@ function ShowtimeList({ showtimes, movies, screens, theaters }) {
     )
 }
 
+// Today as YYYY-MM-DD in the browser's zone (toISOString would use UTC).
+function todayLocal() {
+    const d = new Date()
+    const pad = (n) => String(n).padStart(2, '0')
+    return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`
+}
+
+// "HH:MM" + minutes, or null if it would run past midnight (the API keeps a
+// show on one date, with end after start).
+function addMinutes(time, minutes) {
+    const [h, m] = time.split(':').map(Number)
+    const total = h * 60 + m + minutes
+    if (total >= 24 * 60) return null
+    return `${String(Math.floor(total / 60)).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}`
+}
+
+const ROW_LETTERS = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ'
+
+// Rows of 10 (A1..A10, B1..B10, …) up to the screen's capacity.
+function suggestLayout(capacity) {
+    const cols = Math.min(10, Math.max(1, capacity || 10))
+    const rowCount = Math.min(ROW_LETTERS.length, Math.ceil((capacity || cols) / cols))
+    return { rows: ROW_LETTERS.slice(0, rowCount), cols: String(cols) }
+}
+
 const inp = 'w-full px-3 py-2.5 bg-gray-800 border border-gray-700 rounded-lg text-sm text-white placeholder-gray-500 focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent transition'
 
 function Field({ label, hint, children }) {
@@ -86,6 +121,9 @@ export default function Admin() {
     const [screens, setScreens] = useState([])
     const [movies, setMovies] = useState([])
     const [showtimes, setShowtimes] = useState(null)
+    const [seatCounts, setSeatCounts] = useState({}) // screenId -> number of seats
+    const [activeBookings, setActiveBookings] = useState({}) // showtimeId -> PENDING/CONFIRMED count
+    const [deletingShowtimeId, setDeletingShowtimeId] = useState(null)
     const [error, setError] = useState(null)
     const [activeTab, setActiveTab] = useState('movies')
 
@@ -108,18 +146,30 @@ export default function Admin() {
 
     const load = useCallback(async () => {
         try {
-            const [u, th, sc, mv, st] = await Promise.all([
+            const [u, th, sc, mv, st, allSeats, allBookings] = await Promise.all([
                 adminApi.users(),
                 theatersApi.list(),
                 screensApi.list(),
                 moviesApi.list(),
                 showtimesApi.list(),
+                seatsApi.list(),
+                bookingsApi.list(),
             ])
+            const live = {}
+            for (const b of allBookings) {
+                if (b.bookingStatus === 'PENDING' || b.bookingStatus === 'CONFIRMED') {
+                    live[b.showtimeId] = (live[b.showtimeId] ?? 0) + 1
+                }
+            }
+            setActiveBookings(live)
             setUsers(u)
             setTheaters(th)
             setScreens(sc)
             setMovies(mv)
             setShowtimes(st)
+            const counts = {}
+            for (const s of allSeats) counts[s.screenId] = (counts[s.screenId] ?? 0) + 1
+            setSeatCounts(counts)
         } catch (err) {
             setError(err)
         }
@@ -175,7 +225,13 @@ export default function Admin() {
     }
 
     async function addShowtime(e) {
-        e.preventDefault(); setBusy(true); setError(null)
+        e.preventDefault(); setError(null)
+        // Book only offers shows that haven't started, so a past date (or a
+        // typo like year 0111) creates a showtime nobody can book.
+        const start = new Date(`${showtime.showDate}T${showtime.startTime}`)
+        if (!(start > new Date())) { toast.error('The showtime must start in the future.'); return }
+        if (showtime.endTime <= showtime.startTime) { toast.error('End time must be after start time.'); return }
+        setBusy(true)
         try {
             // The API requires theaterId; a screen belongs to exactly one
             // theater, so take it from the chosen screen.
@@ -193,6 +249,51 @@ export default function Admin() {
             load()
         } catch (err) { setError(err); toast.error('Failed to add showtime.') }
         finally { setBusy(false) }
+    }
+
+    async function deleteShowtime(s, booked) {
+        if (booked > 0) {
+            toast.error(`This showtime has ${booked} active booking(s). Cancel them first.`)
+            return
+        }
+        const movie = movies.find((m) => m.movieId === s.movieId)
+        if (!window.confirm(`Delete the ${s.showDate} ${s.startTime.slice(0, 5)} showing of "${movie?.title ?? `Movie #${s.movieId}`}"?`)) return
+        setDeletingShowtimeId(s.showtimeId); setError(null)
+        try {
+            await showtimesApi.remove(s.showtimeId)
+            toast.success('Showtime deleted')
+            load()
+        } catch (err) { setError(err); toast.error('Failed to delete showtime.') }
+        finally { setDeletingShowtimeId(null) }
+    }
+
+    // Fill the end time from the movie's length (start + duration), so the
+    // admin normally only picks a date and a start time.
+    function changeShowtime(patch) {
+        const next = { ...showtime, ...patch }
+        if ('startTime' in patch || 'movieId' in patch) {
+            const duration = movies.find((m) => m.movieId === Number(next.movieId))?.duration
+            if (duration && next.startTime) next.endTime = addMinutes(next.startTime, duration) ?? next.endTime
+        }
+        setShowtime(next)
+    }
+
+    // Jump to the Seats tab with a bulk layout that matches the capacity.
+    function setUpSeats(screen) {
+        setActiveTab('seats')
+        setBulkMode(true)
+        setSeat((current) => ({ ...current, screenId: String(screen.screenId), ...suggestLayout(screen.capacity) }))
+        pickManageScreen(String(screen.screenId))
+    }
+
+    function pickSeatScreen(screenId) {
+        const chosen = screens.find((x) => x.screenId === Number(screenId))
+        setSeat((current) => ({
+            ...current,
+            screenId,
+            // Pre-fill the bulk layout once; the admin can still edit it.
+            ...(chosen && !current.rows && !current.cols ? suggestLayout(chosen.capacity) : {}),
+        }))
     }
 
     const loadScreenSeats = useCallback(async (screenId) => {
@@ -262,23 +363,37 @@ export default function Admin() {
         try {
             if (bulkMode) {
                 // Bulk: generate seats like A1, A2... B1, B2...
-                const rows = seat.rows.toUpperCase().split('').filter(c => c >= 'A' && c <= 'Z')
+                const rows = [...new Set(seat.rows.toUpperCase().split('').filter(c => c >= 'A' && c <= 'Z'))]
                 const cols = Number(seat.cols)
                 if (rows.length === 0 || !cols) { toast.error('Invalid rows or columns'); setBusy(false); return }
-                let count = 0
+                // Seat numbers are unique per screen: skip the ones that exist,
+                // so re-running a bulk add fills the gaps instead of failing.
+                const existing = new Set((await seatsApi.byScreen(seat.screenId)).map((s) => s.seatNumber.toUpperCase()))
+                let added = 0, skipped = 0, failed = 0
                 for (const row of rows) {
                     for (let col = 1; col <= cols; col++) {
-                        await seatsApi.create({
-                            screenId: Number(seat.screenId),
-                            seatNumber: `${row}${col}`,
-                            seatType: seat.seatType,
-                            status: 'AVAILABLE',
-                            price,
-                        })
-                        count++
+                        const seatNumber = `${row}${col}`
+                        if (existing.has(seatNumber)) { skipped++; continue }
+                        try {
+                            await seatsApi.create({
+                                screenId: Number(seat.screenId),
+                                seatNumber,
+                                seatType: seat.seatType,
+                                status: 'AVAILABLE',
+                                price,
+                            })
+                            added++
+                        } catch (err) {
+                            if (err.status === 409) { skipped++; continue }
+                            failed++
+                            setError(err)
+                        }
                     }
                 }
-                toast.success(`${count} seats added!`)
+                const extra = [skipped && `${skipped} already existed`, failed && `${failed} failed`].filter(Boolean).join(', ')
+                const msg = `${added} seat(s) added${extra ? ` (${extra})` : ''}`
+                if (failed) toast.error(msg)
+                else toast.success(msg)
             } else {
                 await seatsApi.create({
                     screenId: Number(seat.screenId),
@@ -458,9 +573,22 @@ export default function Admin() {
                                 {screens.map((s) => {
                                     const theater = theaters.find((t) => t.theaterId === s.theaterId)
                                     return (
-                                        <div key={s.screenId} className="px-4 py-3">
-                                            <p className="text-sm font-medium text-white">{s.name} <span className="text-xs text-purple-400 font-normal">{s.screenType}</span></p>
-                                            <p className="text-xs text-gray-500">{theater?.name ?? `Theater #${s.theaterId}`} · {s.capacity} seats</p>
+                                        <div key={s.screenId} className="px-4 py-3 flex items-center gap-3">
+                                            <div className="min-w-0 flex-1">
+                                                <p className="text-sm font-medium text-white">{s.name} <span className="text-xs text-purple-400 font-normal">{s.screenType}</span></p>
+                                                <p className="text-xs text-gray-500">
+                                                    {theater?.name ?? `Theater #${s.theaterId}`} · capacity {s.capacity} ·{' '}
+                                                    <span className={(seatCounts[s.screenId] ?? 0) < s.capacity ? 'text-amber-400' : 'text-gray-400'}>
+                                                        {seatCounts[s.screenId] ?? 0} seats added
+                                                    </span>
+                                                </p>
+                                            </div>
+                                            {(seatCounts[s.screenId] ?? 0) < s.capacity && (
+                                                <button onClick={() => setUpSeats(s)}
+                                                        className="flex items-center gap-1 text-xs font-semibold px-2.5 py-1.5 rounded bg-orange-600 hover:bg-orange-700 text-white shrink-0">
+                                                    <Wand2 size={12} /> Set up seats
+                                                </button>
+                                            )}
                                         </div>
                                     )
                                 })}
@@ -480,7 +608,7 @@ export default function Admin() {
                     <p className="text-xs text-gray-500 mb-5">A showtime links a movie to a screen at a specific time.</p>
                     <form onSubmit={addShowtime} className="space-y-4">
                         <Field label="Movie *">
-                            <select value={showtime.movieId} onChange={(e) => setShowtime({ ...showtime, movieId: e.target.value })} required className={inp}>
+                            <select value={showtime.movieId} onChange={(e) => changeShowtime({ movieId: e.target.value })} required className={inp}>
                                 <option value="">Select a movie...</option>
                                 {movies.map((m) => <option key={m.movieId} value={m.movieId}>{m.title}</option>)}
                             </select>
@@ -490,21 +618,25 @@ export default function Admin() {
                                 <option value="">Select a screen...</option>
                                 {screens.map((s) => {
                                     const theater = theaters.find((t) => t.theaterId === s.theaterId)
-                                    return <option key={s.screenId} value={s.screenId}>{theater?.name ?? ''} — {s.name} ({s.screenType})</option>
+                                    return <option key={s.screenId} value={s.screenId}>{theater?.name ?? ''} — {s.name} ({s.screenType}) · {seatCounts[s.screenId] ?? 0} seats</option>
                                 })}
                             </select>
+                            {showtime.screenId && !seatCounts[showtime.screenId] && (
+                                <p className="text-xs text-amber-400 mt-1.5">This screen has no seats yet. Customers can't book it until you add seats in the Seats tab.</p>
+                            )}
                         </Field>
-                        <Field label="Show Date *"><input type="date" value={showtime.showDate} onChange={(e) => setShowtime({ ...showtime, showDate: e.target.value })} required className={inp} /></Field>
+                        <Field label="Show Date *"><input type="date" min={todayLocal()} max="2100-12-31" value={showtime.showDate} onChange={(e) => setShowtime({ ...showtime, showDate: e.target.value })} required className={inp} /></Field>
                         <div className="grid grid-cols-2 gap-3">
-                            <Field label="Start Time *"><input type="time" value={showtime.startTime} onChange={(e) => setShowtime({ ...showtime, startTime: e.target.value })} required className={inp} /></Field>
-                            <Field label="End Time *"><input type="time" value={showtime.endTime} onChange={(e) => setShowtime({ ...showtime, endTime: e.target.value })} required className={inp} /></Field>
+                            <Field label="Start Time *"><input type="time" value={showtime.startTime} onChange={(e) => changeShowtime({ startTime: e.target.value })} required className={inp} /></Field>
+                            <Field label="End Time *" hint="auto from movie length"><input type="time" value={showtime.endTime} onChange={(e) => setShowtime({ ...showtime, endTime: e.target.value })} required className={inp} /></Field>
                         </div>
                         <button type="submit" disabled={busy} className="w-full flex items-center justify-center gap-2 bg-yellow-600 hover:bg-yellow-700 disabled:opacity-50 text-white font-bold py-2.5 rounded-lg text-sm transition-colors">
                             <Plus size={15} />{busy ? 'Adding...' : 'Add Showtime'}
                         </button>
                     </form>
                 </div>
-                <ShowtimeList showtimes={showtimes} movies={movies} screens={screens} theaters={theaters} />
+                <ShowtimeList showtimes={showtimes} movies={movies} screens={screens} theaters={theaters}
+                              activeBookings={activeBookings} deletingId={deletingShowtimeId} onDelete={deleteShowtime} />
                 </div>
             )}
 
@@ -531,11 +663,11 @@ export default function Admin() {
 
                     <form onSubmit={addSeats} className="space-y-4">
                         <Field label="Screen *">
-                            <select value={seat.screenId} onChange={(e) => setSeat({ ...seat, screenId: e.target.value })} required className={inp}>
+                            <select value={seat.screenId} onChange={(e) => pickSeatScreen(e.target.value)} required className={inp}>
                                 <option value="">Select a screen...</option>
                                 {screens.map((s) => {
                                     const theater = theaters.find((t) => t.theaterId === s.theaterId)
-                                    return <option key={s.screenId} value={s.screenId}>{theater?.name ?? ''} — {s.name}</option>
+                                    return <option key={s.screenId} value={s.screenId}>{theater?.name ?? ''} — {s.name} · {seatCounts[s.screenId] ?? 0}/{s.capacity} seats</option>
                                 })}
                             </select>
                         </Field>
@@ -587,7 +719,7 @@ export default function Admin() {
                             <option value="">Select a screen...</option>
                             {screens.map((s) => {
                                 const theater = theaters.find((t) => t.theaterId === s.theaterId)
-                                return <option key={s.screenId} value={s.screenId}>{theater?.name ?? ''} — {s.name}</option>
+                                return <option key={s.screenId} value={s.screenId}>{theater?.name ?? ''} — {s.name} · {seatCounts[s.screenId] ?? 0}/{s.capacity} seats</option>
                             })}
                         </select>
                         <p className="text-xs text-gray-500">Booked seats keep their booking when you change the price. To free a booked seat, cancel its booking.</p>
