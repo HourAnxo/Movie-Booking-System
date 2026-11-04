@@ -6,6 +6,7 @@ import com.example.seatservice.dto.SeatResponseDTO;
 import com.example.seatservice.entity.Seat;
 import com.example.seatservice.entity.SeatStatus;
 import com.example.seatservice.exception.ResourceNotFoundException;
+import com.example.seatservice.exception.SeatInUseException;
 import com.example.seatservice.exception.SeatNotAvailableException;
 import com.example.seatservice.repository.SeatRepository;
 import com.example.seatservice.repository.SeatReservationRepository;
@@ -300,7 +301,18 @@ public class SeatServiceImpl implements SeatService {
     @Override
     public void deleteSeat(Integer id) {
 
-        seatRepository.delete(findSeatById(id));
+        // One conditional DELETE, so a reserve can't land between a check
+        // and the delete. 0 rows: the seat is missing (404) or still held.
+        if (seatRepository.deleteIfUnreserved(id) == 1) {
+            return;
+        }
+
+        findSeatById(id); // throws 404 if it doesn't exist
+
+        throw new SeatInUseException(
+                "Seat " + id + " has an active booking and cannot be deleted."
+                        + " Block it instead, or cancel the booking first"
+        );
     }
 
     // FIND SEAT BY ID
