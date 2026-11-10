@@ -617,7 +617,7 @@ Frontend lint: `npm run lint` (oxlint) in `movie-frontend/`.
 | No Bakong webhook | Settlement is found by polling the Open API (3s in the browser, 30s server-side) |
 | Bakong token expires | Roughly every 90 days; checks then fail with 502 until `BAKONG_API_TOKEN` is renewed |
 | Paid-but-cancelled needs a manual refund | If a booking is cancelled while its customer is paying, the payment is PAID and logged for refund |
-| Unvalidated references | `showtimeId`, `screenId` on seats, and showtime's movie/theater/screen ids are taken on trust |
+| Unvalidated references | That a booking's showtime is on its seat's screen, `screenId` on seats, and showtime's movie/theater/screen ids are taken on trust (a booking's showtime is checked to exist and not have started) |
 | Role changes lag at the gateway | A demoted admin keeps gateway-level ADMIN until their token expires |
 | First admin needs SQL | No bootstrap mechanism |
 | Frontend not containerised | `docker compose` runs only the backend |

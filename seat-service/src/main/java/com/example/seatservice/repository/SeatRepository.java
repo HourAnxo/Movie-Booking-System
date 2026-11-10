@@ -6,6 +6,7 @@ import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 
@@ -57,4 +58,29 @@ public interface SeatRepository
             @Param("seatId") Integer seatId,
             @Param("price") java.math.BigDecimal price
     );
+
+    /**
+     * Deletes the seat only if no live booking holds it, in one statement.
+     * A reservation row exists exactly while its booking is PENDING or
+     * CONFIRMED (cancel deletes it), and a pre-V4 booking shows up as status
+     * BOOKED. Either way the seat must stay, or the booking would point at a
+     * seat that no longer exists (and the FK cascade would silently drop its
+     * reservation).
+     *
+     * Never split this into "check for reservations, then delete": a
+     * reserve landing in between would be cascaded away. Returns 0 when the
+     * seat is missing or still held; the caller tells the two apart.
+     */
+    @Transactional
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+            DELETE FROM seats
+             WHERE seat_id = :seatId
+               AND status <> 'BOOKED'
+               AND NOT EXISTS (
+                     SELECT 1 FROM seat_reservations r
+                      WHERE r.seat_id = :seatId
+                   )
+            """, nativeQuery = true)
+    int deleteIfUnreserved(@Param("seatId") Integer seatId);
 }

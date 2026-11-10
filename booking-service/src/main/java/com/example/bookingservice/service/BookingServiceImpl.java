@@ -1,19 +1,25 @@
 package com.example.bookingservice.service;
 
 import com.example.bookingservice.client.SeatServiceClient;
+import com.example.bookingservice.client.ShowtimeServiceClient;
 import com.example.bookingservice.client.UserServiceClient;
 import com.example.bookingservice.dto.BookingRequestDTO;
 import com.example.bookingservice.dto.BookingResponseDTO;
 import com.example.bookingservice.dto.ReservedSeatDTO;
+import com.example.bookingservice.dto.ShowtimeDTO;
 import com.example.bookingservice.entity.Booking;
 import com.example.bookingservice.entity.BookingStatus;
 import com.example.bookingservice.exception.ResourceNotFoundException;
+import com.example.bookingservice.exception.ShowtimeNotBookableException;
 import com.example.bookingservice.repository.BookingRepository;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.time.Instant;
 import java.time.LocalDateTime;
+import java.time.ZoneId;
 import java.util.List;
 import java.util.Objects;
 
@@ -26,24 +32,50 @@ public class BookingServiceImpl implements BookingService {
     private final BookingRepository bookingRepository;
     private final SeatServiceClient seatServiceClient;
     private final UserServiceClient userServiceClient;
+    private final ShowtimeServiceClient showtimeServiceClient;
+    private final ZoneId showtimeZone;
 
     public BookingServiceImpl(
             BookingRepository bookingRepository,
             SeatServiceClient seatServiceClient,
-            UserServiceClient userServiceClient
+            UserServiceClient userServiceClient,
+            ShowtimeServiceClient showtimeServiceClient,
+            @Value("${booking.showtime-zone}") String showtimeZone
     ) {
         this.bookingRepository = bookingRepository;
         this.seatServiceClient = seatServiceClient;
         this.userServiceClient = userServiceClient;
+        this.showtimeServiceClient = showtimeServiceClient;
+        this.showtimeZone = ZoneId.of(showtimeZone);
+    }
+
+
+    /**
+     * True once the show's start, read as wall-clock time in the cinema's
+     * zone, is at or before now. A show is bookable only strictly before
+     * it starts, which is also what the Book page offers.
+     */
+    static boolean hasStarted(ShowtimeDTO showtime, ZoneId zone, Instant now) {
+
+        Instant start = showtime.showDate()
+                .atTime(showtime.startTime())
+                .atZone(zone)
+                .toInstant();
+
+        return !start.isAfter(now);
     }
 
 
     // CREATE BOOKING
     /**
-     * Validates the user, then reserves the seat, then persists. The user
-     * check comes first because it has no side effect — failing it after
-     * reserving would mean holding and releasing a seat for a request that
-     * was never going to succeed.
+     * Validates the user and the showtime, then reserves the seat, then
+     * persists. Both checks come first because they have no side effect —
+     * failing one after reserving would mean holding and releasing a seat
+     * for a request that was never going to succeed.
+     *
+     * A showtime that doesn't exist is 400, and one that has started is 400
+     * too: the Book page hides started shows, but nothing else stopped a
+     * direct API call from booking a show that was already over.
      *
      * If seat-service refuses (409) the exception propagates and no
      * booking row is written, so a lost race leaves no orphan PENDING
@@ -59,6 +91,16 @@ public class BookingServiceImpl implements BookingService {
     ) {
 
         userServiceClient.requireUserExists(request.userId());
+
+        ShowtimeDTO showtime =
+                showtimeServiceClient.getShowtime(request.showtimeId());
+
+        if (hasStarted(showtime, showtimeZone, Instant.now())) {
+            throw new ShowtimeNotBookableException(
+                    "Showtime " + request.showtimeId()
+                            + " has already started and can no longer be booked"
+            );
+        }
 
         ReservedSeatDTO seat =
                 seatServiceClient.reserveSeat(

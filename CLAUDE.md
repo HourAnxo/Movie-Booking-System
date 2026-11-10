@@ -63,18 +63,23 @@ The plugin URL is hard-coded to **`localhost:3306`** (the local MySQL). For the 
 
 ### Tests
 
-**Every test but two is a `@SpringBootTest` `contextLoads` smoke test.** It boots the full context, so a data service needs its database on the local MySQL (3306); discovery-server, api-gateway and admin-service have none. Eureka doesn't have to be up: the client only logs `Connection refused` and the test still passes. `mvn test` is really a check that all twelve services can start.
+**Every test but four is a `@SpringBootTest` `contextLoads` smoke test.** It boots the full context, so a data service needs its database on the local MySQL (3306); discovery-server, api-gateway and admin-service have none. Eureka doesn't have to be up: the client only logs `Connection refused` and the test still passes. `mvn test` is really a check that all twelve services can start.
 
 **Booting the context runs Flyway**, so a test run applies any pending migration to the local database for real.
 
-The two exceptions are in seat-service and need **Docker** (Testcontainers `mysql:8.4`, Eureka client off), not the local MySQL:
+Three of the exceptions are in seat-service and need **Docker** (Testcontainers `mysql:8.4`, Eureka client off), not the local MySQL:
 
 - **`SeatReservationConcurrencyTest`** releases sixteen threads against one seat in one showtime, and exactly one must win. It also checks that showtimes are independent, that a new showtime starts empty, that release is per show and idempotent, and that a pre-V4 BOOKED seat can still be released.
 - **`SeatUpdateKeepsStatusTest`** checks that seat edits and price changes never overwrite `status`, and that only AVAILABLE ↔ BLOCKED moves are accepted.
+- **`SeatDeleteGuardTest`** checks that a seat held by a live booking (a reservation, or pre-V4 BOOKED) can't be deleted, and races a reserve against a delete 40 times: exactly one side wins, and a successful reserve never loses its seat.
+
+The fourth, booking-service's **`ShowtimeStartedTest`**, is a plain unit test (no Spring, no database) of when a showtime counts as started in `booking.showtime-zone`.
 
 ```powershell
 cd seat-service; .\mvnw.cmd test -Dtest=SeatReservationConcurrencyTest
 cd seat-service; .\mvnw.cmd test -Dtest=SeatUpdateKeepsStatusTest
+cd seat-service; .\mvnw.cmd test -Dtest=SeatDeleteGuardTest
+cd booking-service; .\mvnw.cmd test -Dtest=ShowtimeStartedTest
 ```
 
 If you touch the reservation path, confirm `SeatReservationConcurrencyTest` can go red: drop the UNIQUE constraint from V4 and swap in a check-then-insert (16 winners), then restore both. A check-then-insert alone stays green, because the key still catches it.
@@ -166,8 +171,9 @@ npm run build | lint | preview
 
 ```
 POST /api/bookings
-  booking -> user-service  GET /api/users/{userId}     no such user -> 400, nothing reserved
-  booking -> seat-service  PUT /api/seats/{id}/reserve?showtimeId=N
+  booking -> user-service      GET /api/users/{userId}     no such user -> 400, nothing reserved
+  booking -> showtime-service  GET /api/showtimes/{id}     no such showtime, or it has started -> 400, nothing reserved
+  booking -> seat-service      PUT /api/seats/{id}/reserve?showtimeId=N
                              inserts (showtimeId, seatId) reservation, booking PENDING (201)
                              taken for that show, or seat BLOCKED -> 409, no booking row
 
@@ -189,7 +195,9 @@ The reasoning behind each rule below is in `docs/project-overview.md` §4.
 
 **Booking rules:**
 
-- Validate the user, then reserve the seat, then write the booking row. Don't reorder.
+- Validate the user, then the showtime, then reserve the seat, then write the booking row. Don't reorder: both checks have no side effect, so failing one leaves nothing to release.
+- **A showtime is bookable only before it starts.** `showDate` + `startTime` have no zone; booking-service reads them in **`booking.showtime-zone`** (`${SHOWTIME_ZONE:Asia/Phnom_Penh}`), not the JVM zone, because the container runs on UTC. Started → `ShowtimeNotBookableException` (400, not 409: the client's 409 means "reload the seat grid").
+- **A seat a live booking holds can't be deleted** (409 `SeatInUseException`). `SeatRepository.deleteIfUnreserved` is one conditional DELETE (no reservation row, not BOOKED); never split it into check-then-delete, since the FK cascade would silently drop a reservation that landed in between. Retire a seat by blocking it.
 - **Reserve and release both carry the booking's `showtimeId`** (a required query param on seat-service).
 - **Release is idempotent.** It deletes the `(showtime, seat)` reservation, and a missing row is a no-op. When no row was removed and the seat itself is `BOOKED` (pre-V4), it CASes that back to AVAILABLE. `safeReleaseSeat` logs and swallows seat-service errors, so a seat may stay booked for that show until reconciled.
 - `cancelBooking` returns early on `CANCELLED`. `confirmBooking` refuses `CANCELLED` (400). `deleteBooking` releases the seat unless already `CANCELLED`. `updateBooking` never changes `seatId`, and refuses a `showtimeId` change (400), since the reservation is keyed by it.
@@ -229,11 +237,11 @@ Each service has `exception/GlobalExceptionHandler` returning an `ErrorResponse`
 | Exception | Status |
 | --- | --- |
 | `ResourceNotFoundException` | 404 |
-| `IllegalArgumentException`, `InvalidBookingReferenceException` (booking: userId doesn't exist) | 400 |
+| `IllegalArgumentException`, `InvalidBookingReferenceException` (booking: userId or showtimeId doesn't exist), `ShowtimeNotBookableException` (booking: show has started) | 400 |
 | `MethodArgumentNotValidException` (all violations joined into `message`), `HttpMessageNotReadableException` (bad JSON or enum), `MissingServletRequestParameterException`, `MethodArgumentTypeMismatchException` | 400 |
 | `InvalidCredentialsException` (auth) | 401 |
 | `PaymentForbiddenException` (payment: someone else's booking) | 403 |
-| `DuplicateResourceException` (auth, user), `SeatNotAvailableException` (seat), `SeatUnavailableException` (booking), `PaymentStateException` (payment) | 409 |
+| `DuplicateResourceException` (auth, user), `SeatNotAvailableException`, `SeatInUseException` (seat), `SeatUnavailableException` (booking), `PaymentStateException` (payment) | 409 |
 | `RestClientException`, `BakongApiException` | 502 — a dependency answered badly |
 | `CallNotPermittedException`, `BakongNotConfiguredException` | 503 — breaker open or Bakong unconfigured; retry later |
 | anything else | 500 |
@@ -242,7 +250,7 @@ Each service has `exception/GlobalExceptionHandler` returning an `ErrorResponse`
 
 Details are in `docs/service-communication.md`. The four callers (auth, admin, booking, payment) each have `config/RestClientConfig` and `config/ResilienceConfig`.
 
-- Current calls: auth → user (profile on register), admin → user (listing), booking → seat (reserve/release), booking → user (validate userId), payment → booking (get/confirm/cancel).
+- Current calls: auth → user (profile on register), admin → user (listing), booking → seat (reserve/release), booking → user (validate userId), booking → showtime (exists and hasn't started), payment → booking (get/confirm/cancel).
 - **Timeouts (connect 2s, read 3s) are only on the `@LoadBalanced` builder**, via `HttpClientSettings` from **`spring-boot-http-client`**, which each caller declares because the web starter doesn't include it. Boot 3's `ClientHttpRequestFactorySettings` is gone, so don't follow older examples. The `@Primary` plain builder is Eureka's and stays untimed.
 - **`ignoreExceptions` includes `HttpClientErrorException`** (a 4xx means the dependency is healthy). booking-service also ignores `SeatUnavailableException` and `InvalidBookingReferenceException`.
 - **`spring.cloud.circuitbreaker.resilience4j.disable-thread-pool=true` in all four**, so the call keeps its `ThreadLocal` context and doesn't get a second timeout.
@@ -267,8 +275,8 @@ Flyway owns the schema. Every data service sets `ddl-auto=validate`, so an entit
 
 There are no cross-service foreign keys. A reference is an integer, and validating it takes a remote call.
 
-- **booking-service validates `seatId` (the reserve) and `userId` (`GET /api/users/{id}`).** A user-service outage blocks bookings with 502 rather than failing open. `updateBooking` re-checks only when the owner changes.
-- **Taken on trust:** `Booking.showtimeId` (seat-service doesn't check that the showtime is on the seat's screen, or hasn't started), `Seat.screenId`, and `Showtime.movieId`/`theaterId`/`screenId`. The legacy `POST /api/payments` still accepts a client amount, but nothing it creates can reach PAID without an ADMIN.
+- **booking-service validates `seatId` (the reserve), `userId` (`GET /api/users/{id}`) and `showtimeId` (`GET /api/showtimes/{id}`: exists and hasn't started).** A user-service or showtime-service outage blocks bookings with 502 rather than failing open. `updateBooking` re-checks only when the owner changes.
+- **Taken on trust:** that `Booking.showtimeId` is on the seat's screen (nothing checks it), `Seat.screenId`, and `Showtime.movieId`/`theaterId`/`screenId`. The legacy `POST /api/payments` still accepts a client amount, but nothing it creates can reach PAID without an ADMIN.
 - **There are two user tables.** `auth_db.users` holds credentials; `user_db.users` holds profiles, and `Booking.userId` refers to it. `auth_db.users.profile_id` (auth `V3`, nullable) links them. The link travels as a `userId` token claim, which the gateway forwards as **`X-Auth-UserId`**, and it's returned by register, login and profile. `login` backfills a missing `profile_id` via `GET /api/users/email/{email}` and never throws. auth_db must never read user_db's tables directly.
 - **`AuthServiceImpl.register` is a `@Transactional` dual write**, so a failed user-service call rolls back the credential row.
 
