@@ -8,7 +8,7 @@ A Spring Boot 4 / Spring Cloud microservice system for movie theater booking: tw
 
 One git repo (branch `master`). This file holds the rules; the reasons live in `docs/project-overview.md` (the system, the saga and payment rationale, "Lessons learned") and `docs/service-communication.md` (RestClient, Eureka, timeouts, breakers). Keep them in step with this file when behaviour changes.
 
-**Repo hygiene:** `.idea/` is committed (8 files), so IntelliJ setting changes such as the Lombok annotation-processor profiles in `.idea/compiler.xml` show up in diffs. The root `.env` is gitignored and holds real secrets (`JWT_SECRET`, `BAKONG_*`); don't print or copy it — `.env.example` shows the shape.
+**Repo hygiene:** `.idea/` is committed (9 files), so IntelliJ setting changes such as the Lombok annotation-processor profiles in `.idea/compiler.xml` or the DB connections in `.idea/dataSources.xml` show up in diffs. The root `.env` is gitignored and holds real secrets (`JWT_SECRET`, `BAKONG_*`); don't print or copy it — `.env.example` shows the shape.
 
 ## Do not break these
 
